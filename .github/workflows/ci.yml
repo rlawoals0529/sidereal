@@ -33,3 +33,33 @@ jobs:
       # Prove the sweep can still fail. A contrast probe that has quietly stopped measuring
       # reports a clean sweep forever, which is indistinguishable from a clean page.
       - run: "! npm run sweep -- --self-test"
+
+  # Deploy only from main, and only behind both gates above.
+  #
+  # `needs` is the whole point: a deploy that races the tests is a deploy that can publish a
+  # red build, and this is the one repository whose broken state is visible to strangers.
+  deploy:
+    needs: [check, browser]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      # Built here rather than trusting a committed dist. The assets binding publishes whatever
+      # ./dist contains, so a stale one would ship silently.
+      - run: npm run build
+      - run: npx wrangler@4.131.1 deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # The deployed thing, checked rather than assumed. A green deploy step only says the
+      # upload succeeded, which is not the same as the site answering.
+      - name: Verify the live site answers
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' https://sidereal.rlawoals0529.workers.dev/health)
+            [ "$code" = "200" ] && echo "live, health 200" && exit 0
+            echo "attempt $i: $code"; sleep 10
+          done
+          echo "the deploy uploaded but the site never answered"; exit 1

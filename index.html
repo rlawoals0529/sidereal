@@ -1,0 +1,33 @@
+<!doctype html>
+<!--
+  `color-scheme: dark` on the root and nothing else.
+
+  The palettes are scoped to `[data-theme]`, which is set by the module below, and a module is
+  deferred, so there is a frame before any token exists. Without this the browser paints its own
+  white canvas in that frame and a page whose whole subject is a night sky opens with a flash.
+  A palette id cannot be hard-coded here: it lives in one place, as `DEFAULT_THEME`, precisely
+  so it is not retyped. `color-scheme` needs no id and covers the gap.
+-->
+<html lang="en" style="color-scheme: dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>sidereal</title>
+    <meta
+      name="description"
+      content="A live sky of real events: Wikipedia edits, earthquakes, the ISS and the aurora, with everyone else who is watching."
+    />
+  </head>
+  <body>
+    <!--
+      The canvas is hidden from the accessibility tree on purpose. It has no children, so nothing
+      in it can be focused or read, and the register beside it is the accessible equivalent: the
+      same lights, as real buttons, with the same evidence. Exposing the canvas as an image with
+      a label would be a second, worse description of something already described properly.
+    -->
+    <canvas id="sky" class="sky" aria-hidden="true"></canvas>
+    <a class="skip" href="#register">Skip to the list of lights</a>
+    <div id="chrome" class="chrome"></div>
+    <script type="module" src="/src/ui/main.ts"></script>
+  </body>
+</html>

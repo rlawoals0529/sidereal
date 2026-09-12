@@ -44,17 +44,18 @@ export function backingId(b: Backing): string {
 /**
  * The elements that are allowed on screen without being a light.
  *
- * Two, and both are coordinate references rather than things that happened: the horizon
- * circle and the four cardinal ticks on it. They are drawn in `--edge`, the token for a
- * boundary that does not have to be seen, and they are the frame the sky is read against
- * the way an axis is the frame a chart is read against.
+ * One, and it is a coordinate reference rather than a thing that happened: the horizon
+ * circle. Drawn in `--edge`, the token for a boundary that does not have to be seen, it is
+ * the frame the sky is read against the way an axis is the frame a chart is read against.
+ * The four compass points are the same ring brightened over a few degrees of azimuth rather
+ * than four more marks, which is one fewer element on screen for the same information.
  *
- * Frozen, listed by name, and pinned by a test that asserts these exact two entries. Adding
- * a third is a deliberate act that fails a test until someone changes the test, which is the
+ * Frozen, listed by name, and pinned by a test that asserts this exact one entry. Adding a
+ * second is a deliberate act that fails a test until someone changes the test, which is the
  * point: this is the list a wash of ambient glow would have to be added to, and adding it
  * there is at least honest.
  */
-export const CHROME = Object.freeze(["horizon", "cardinals"] as const);
+export const CHROME = Object.freeze(["horizon"] as const);
 export type ChromeName = (typeof CHROME)[number];
 
 /** A draw the renderer issued, as it reports itself for audit. */

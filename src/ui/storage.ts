@@ -112,3 +112,21 @@ export function memorySessionStore(seed: readonly Session[] = []): SessionStore 
     },
   };
 }
+
+/**
+ * Whether this browser will actually keep anything.
+ *
+ * Asked once at boot so the focus panel can say "sessions are not being recorded" instead of
+ * showing a streak of zero forever with no explanation. A streak that silently never moves is
+ * indistinguishable from a broken streak, and the private-window case is common enough that
+ * somebody will hit it.
+ *
+ * It writes a probe key rather than reasoning about the browser, because the failure modes are
+ * a refusal (private window), a full quota, and a storage that accepts writes and discards
+ * them, and only a write-then-read tells those apart.
+ */
+export function storageAvailable(host: StorageHost = browserStorage): boolean {
+  const key = "sidereal:probe";
+  host.set(key, "1");
+  return host.get(key) === "1";
+}

@@ -30,7 +30,7 @@
  * week and not.
  */
 import type { Backing } from "./provenance.ts";
-import { backingId, type Ledger } from "./provenance.ts";
+import type { Ledger } from "./provenance.ts";
 
 /** Indices into these arrays are derived from the array's own length, so `!` is a statement
  *  that the bound was already checked rather than a hope that it was. */
@@ -316,10 +316,3 @@ export class PathLayer extends BaseLayer {
     return { name: this.name, live: this.verts, capacity: this.capacity, dropped: this.dropped };
   }
 }
-
-/** Chrome has no backing by design, so it reports itself as a path with every key absent. */
-export function chromeBacking(): Backing | null {
-  return null;
-}
-
-export { backingId };

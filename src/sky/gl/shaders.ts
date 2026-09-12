@@ -155,9 +155,9 @@ void main() {
 `);
 
 export const DISC_VERT = vertexSource(`
-in vec2 aEq;
-in vec3 aFade;   // probability before, probability after, seconds at which the cross started
-in vec3 aForm;   // diameter px, softness 0..1, drift amplitude px
+in vec2 aEq;     // declination and right ascension, OR altitude and azimuth: see aForm.w
+in vec4 aFade;   // value before, value after, second the cross started, how long it takes
+in vec4 aForm;   // angular diameter deg, softness 0..1, drift amplitude px, 1 if already horizontal
 in vec3 aColor;
 in float aSeed;  // 0..1, hashed from the light's own id so two lights never drift in step
 
@@ -166,10 +166,13 @@ out vec3 vColor;
 out float vSharp;
 out float vAlpha;
 
-const float AURORA_FADE_S = 40.0;
-
 void main() {
-  vec2 h = skyHorizontal(aEq.x, aEq.y, uLst);
+  // A visitor is the one light that is not on the celestial sphere. All we are told about
+  // where somebody is is where they are looking, so that is where their light goes, live, in
+  // the viewer's own frame. It does not turn with the sky because it is not on the sky, and
+  // that difference is legible: the world rotates past, the people stay where they are
+  // looking.
+  vec2 h = aForm.w > 0.5 ? aEq : skyHorizontal(aEq.x, aEq.y, uLst);
   vec4 p = skyProject(skyLocal(h));
   float ext = skyExtinction(h.x);
   if (p.z < 0.5 || ext <= 0.0) { gl_Position = skyDiscard(); vAlpha = 0.0; return; }
@@ -177,7 +180,7 @@ void main() {
   // Between two measured probabilities, never toward an invented one. This is the aurora
   // breathing, and it breathes over forty seconds because OVATION lands every five minutes
   // and a step would read as a glitch.
-  float a = mix(aFade.x, aFade.y, clamp((uNow - aFade.z) / AURORA_FADE_S, 0.0, 1.0));
+  float a = mix(aFade.x, aFade.y, clamp((uNow - aFade.z) / max(aFade.w, 0.001), 0.0, 1.0));
 
   // The social signal, and the only place in the renderer where motion encodes a state
   // rather than a measurement. A visitor in a focus session has drift zero: it holds dead
@@ -191,8 +194,12 @@ void main() {
   );
   float twinkle = 1.0 + 0.22 * drifting * sin(uNow * 0.7 + aSeed * 12.566);
 
+  // Size in degrees of sky, carried to pixels through the conformal factor, so a light keeps
+  // its angular size wherever it lands and changing the field of view zooms it correctly. The
+  // floor stops the faintest aurora cell from falling below a pixel and disappearing.
+  float diamPx = max(aForm.x * RAD_PER_DEG * p.w * uScale, 1.5);
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
-  gl_Position = skyClip(p.xy + wobble + corner * (aForm.x * 0.5));
+  gl_Position = skyClip(p.xy + wobble + corner * (diamPx * 0.5));
 
   vUv = corner;
   vColor = aColor;

@@ -94,16 +94,32 @@ export type PolledFeed = {
 };
 
 /**
- * The feeds slice registers its pollers here, and this is the only file in `src/worker/`
- * it needs to touch. One line each:
+ * Where the pollers get registered. This is the only file in `src/worker/` that has to
+ * change to put a feed on the clock.
  *
- *     import { quakes, iss, aurora, wikiSip } from "../feeds/index.ts";
- *     export const POLLED_FEEDS: PolledFeed[] = [quakes, iss, aurora, wikiSip];
+ * Empty is a working state, not a stub. An empty registry makes the alarm a no-op costing
+ * one storage write per fire, and `/ingest` still works, so a feeds slice that would
+ * rather run its own schedule somewhere else can ignore this array entirely. Both paths
+ * land in the same `SkyRoom.ingest`, which is where all the validation is.
  *
- * Empty is a working state, not a stub: an empty registry makes the alarm a no-op that
- * costs one storage write per fire, and the `/ingest` route below still works. A feeds
- * slice that would rather run its own schedule elsewhere can ignore this array entirely and
- * just POST batches in. Both paths land in the same `SkyRoom.ingest`.
+ * It is left empty deliberately rather than wired to `src/feeds/` as that slice lands.
+ * Wiring is a cross-slice decision and belongs in a change that can be reviewed as one,
+ * not a speculative import added by whichever slice finished second. What the wiring looks
+ * like against the surface `src/feeds/index.ts` actually exposes:
+ *
+ *     import { fetchQuakes, normalizeQuakeEvents } from "../feeds/index.ts";
+ *
+ *     const quakes: PolledFeed = {
+ *       id: "quake",
+ *       everyMs: 60_000,
+ *       poll: async () => normalizeQuakeEvents(await fetchQuakes()),
+ *     };
+ *
+ * The ISS and the aurora are the same shape with different cadences. Wikipedia is the one
+ * that is not, and `streamWikiChunks(signal)` is already the right shape for it: open the
+ * stream, read whole lines until a short deadline, abort the signal, hand what arrived to
+ * `normalizeWikiEvents`. A sip with a deadline and an abort, not a connection that is kept.
+ * The reasoning for that is at the top of this file.
  */
 export const POLLED_FEEDS: PolledFeed[] = [];
 

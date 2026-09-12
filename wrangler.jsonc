@@ -17,11 +17,23 @@
   // should stay dead. The real poll cadence is the object's alarm; see `src/worker/feeds.ts`.
   "triggers": { "crons": ["* * * * *"] },
 
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+
+  // The built page, served from the same origin as the socket.
+  //
+  // Same origin is the point, not a convenience. A page on one host opening a WebSocket to
+  // another is a cross-origin upgrade, which means the room has to decide which origins may
+  // connect, and a portfolio link that works everywhere except behind a strict proxy is worse
+  // than one origin that always works.
+  //
+  // `run_worker_first` is false by default, so a request for a real file is served from the
+  // asset store without waking the worker at all. The worker only sees /sky, /ingest, /stats
+  // and /health, which is what keeps an idle visit costing nothing.
+  "assets": { "directory": "./dist", "not_found_handling": "single-page-application" }
 
   // No `vars` block on purpose. INGEST_TOKEN is a secret, not a var: a var is committed
   // plaintext in this file. `npx wrangler secret put INGEST_TOKEN`, and `.dev.vars` locally.
   //
-  // The UI slice adds its own `assets` binding here when it has something to serve. This
-  // worker 404s everything it does not own, so adding one will not collide.
+  // The `assets` binding above serves ./dist, which `npm run build` writes. Deploying without
+  // building first publishes whatever dist happened to contain, so build is part of deploy.
 }

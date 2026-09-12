@@ -89,8 +89,18 @@ export type RoomStats = {
   dropped: number;
   /** Ingested events whose id was already queued. A replayed batch is not an error. */
   duplicates: number;
-  /** Ingested payloads that failed validation. */
+  /** Ingested payloads that failed validation. A malformed event, and someone's bug. */
   rejected: number;
+  /**
+   * Events discarded for arriving over `MAX_INGEST_BATCH` in one call.
+   *
+   * Counted apart from `rejected` because the two mean opposite things and want opposite
+   * responses. A rejection says a caller sent something wrong. A truncation says a caller sent
+   * more good events than this room will take, which is a tuning signal about the feed that
+   * produced them, not a fault. Summed together, as they were, a healthy sky reported hundreds
+   * of rejections and nobody could tell whether anything was actually broken.
+   */
+  truncated: number;
   /** Presence or event frames the runtime refused. Each one costs a socket. */
   sendFailures: number;
 };
@@ -127,6 +137,7 @@ export class SkyRoom {
   #dropped = 0;
   #duplicates = 0;
   #rejected = 0;
+  #truncated = 0;
   #sendFailures = 0;
 
   constructor(options: RoomOptions) {
@@ -153,6 +164,7 @@ export class SkyRoom {
       dropped: this.#dropped,
       duplicates: this.#duplicates,
       rejected: this.#rejected,
+      truncated: this.#truncated,
       sendFailures: this.#sendFailures,
     };
   }
@@ -310,12 +322,13 @@ export class SkyRoom {
    * no one in it is how a service that should cost nothing when idle ends up costing
    * something when idle.
    */
-  ingest(payload: unknown): { accepted: number; dropped: number; rejected: number } {
+  ingest(payload: unknown): { accepted: number; dropped: number; rejected: number; truncated: number } {
     const { events, rejected, truncated } = validateIngest(payload);
-    this.#rejected += rejected + truncated;
+    this.#rejected += rejected;
+    this.#truncated += truncated;
 
     if (!this.occupied) {
-      return { accepted: 0, dropped: events.length, rejected: rejected + truncated };
+      return { accepted: 0, dropped: events.length, rejected, truncated };
     }
 
     let accepted = 0;
@@ -342,7 +355,7 @@ export class SkyRoom {
     }
 
     if (this.#queue.length > 0) this.#requestFlush();
-    return { accepted, dropped, rejected: rejected + truncated };
+    return { accepted, dropped, rejected, truncated };
   }
 
   /**

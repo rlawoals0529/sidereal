@@ -89,7 +89,7 @@ function harness() {
 }
 
 /** Attach a client and complete the handshake. */
-function enter(room: SkyRoom, palette = "civil"): FakeClient {
+function enter(room: SkyRoom, palette = "twilight-comet"): FakeClient {
   const client = new FakeClient();
   expect(room.attach(client)).toBe(true);
   room.handleMessage(client, JSON.stringify({ t: "hello", palette }));
@@ -115,21 +115,21 @@ describe("presence", () => {
   it("two clients see each other", () => {
     const { room } = harness();
 
-    const a = enter(room, "civil");
+    const a = enter(room, "twilight-comet");
     const welcomeA = a.only("welcome");
     expect(welcomeA.others).toEqual([]);
 
-    const b = enter(room, "nautical");
+    const b = enter(room, "starfall-dusk");
     const welcomeB = b.only("welcome");
 
     // b learned about a from its welcome.
     expect(welcomeB.others.map((p: Presence) => p.id)).toEqual([welcomeA.you]);
-    expect(welcomeB.others[0]?.palette).toBe("civil");
+    expect(welcomeB.others[0]?.palette).toBe("twilight-comet");
 
     // a learned about b from a join broadcast.
     const join = a.only("join");
     expect(join.who.id).toBe(welcomeB.you);
-    expect(join.who.palette).toBe("nautical");
+    expect(join.who.palette).toBe("starfall-dusk");
 
     // Nobody is told about themselves twice.
     expect(b.ofType("join")).toHaveLength(0);
@@ -460,13 +460,30 @@ describe("ingest validation", () => {
     expect(client.only("events").batch.map((e) => e.magnitude)).toEqual([1, 0]);
   });
 
-  it("truncates an oversized batch before walking it", () => {
+  it("truncates an oversized batch before walking it, and says so as truncation not rejection", () => {
+    // The two counters are separate on purpose. This batch is 1000 perfectly valid events, so
+    // nothing here is wrong with the payload: 744 simply did not fit. Reporting that as a
+    // rejection made a healthy sky look like it was being fed garbage, and the real thing it
+    // is saying is that whatever produced the batch is running hot.
     const h = harness();
     enter(h.room);
     const result = h.room.ingest(Array.from({ length: 1000 }, (_, i) => skyEvent(`e${i}`)));
 
     expect(result.accepted).toBe(256);
-    expect(result.rejected).toBe(744);
+    expect(result.truncated).toBe(744);
+    expect(result.rejected).toBe(0);
+    expect(h.room.stats().truncated).toBe(744);
+    expect(h.room.stats().rejected).toBe(0);
+  });
+
+  it("counts a malformed event as a rejection, which truncation is not", () => {
+    const h = harness();
+    enter(h.room);
+    const result = h.room.ingest([skyEvent("good"), { id: "bad" }, null, skyEvent("also-good")]);
+
+    expect(result.accepted).toBe(2);
+    expect(result.rejected).toBe(2);
+    expect(result.truncated).toBe(0);
   });
 
   it("shrugs off a payload that is not an array", () => {
@@ -483,7 +500,7 @@ describe("surviving a hibernation", () => {
     const a = new FakeClient();
     const attachment = {
       id: "aaaaaaaaaaaaaaaa",
-      palette: "night",
+      palette: "falling-stars",
       az: 10,
       alt: 20,
       focused: true,
@@ -498,7 +515,7 @@ describe("surviving a hibernation", () => {
     h.room.attach(b);
     const others = b.only("welcome").others;
     expect(others).toEqual([
-      { id: "aaaaaaaaaaaaaaaa", palette: "night", az: 10, alt: 20, focused: true, since: 1_699_999_000_000 },
+      { id: "aaaaaaaaaaaaaaaa", palette: "falling-stars", az: 10, alt: 20, focused: true, since: 1_699_999_000_000 },
     ]);
   });
 

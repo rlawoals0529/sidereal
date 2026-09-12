@@ -128,9 +128,19 @@ export const POLLED_FEEDS: PolledFeed[] = [
   { id: "aurora", everyMs: 300_000, poll: async () => normalizeAuroraEvents(await fetchAurora()) },
 ];
 
-/** How long a sip reads for. Short, because the alarm is every 5 s and this is not the only
- *  feed on it. At around 100 edits a second this still returns a few hundred records. */
-const WIKI_SIP_MS = 800;
+/**
+ * How long a sip reads for, set from a measurement rather than a guess.
+ *
+ * A live run at 800 ms returned about 1,136 non-bot records, so the firehose is running near
+ * 1,400 a second, well above the ~100 a second the rate is usually quoted at. The room takes
+ * `MAX_INGEST_BATCH` of 256 per call, so 800 ms meant fetching, decoding and normalizing about
+ * 1,100 records in order to throw 880 of them away. Paying to transport what you are about to
+ * discard is the exact thing the sip design was supposed to avoid.
+ *
+ * 180 ms lands near the cap instead. Overshoot is still expected, because the rate moves with
+ * the time of day, and it is now visible in its own counter rather than summed into rejections.
+ */
+const WIKI_SIP_MS = 180;
 
 /** A ceiling on what one sip may hold, so an unusually fast window cannot grow without bound.
  *  A record is roughly 1 kB, so this is a few thousand of them. */

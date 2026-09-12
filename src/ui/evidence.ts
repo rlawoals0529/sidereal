@@ -13,9 +13,9 @@
  * measurement. The other is a guess about a continent. A row that renders them the same way is
  * a lie with a nice font.
  *
- * `evidenceLines` is the single place that decides what is said, and both the panel and the
- * accessible name of the keyboard list are built from it, so a sighted reader and a screen
- * reader get the same claims.
+ * `evidenceRows` is the single place that decides what is said. The panel renders those rows
+ * and the tests read the same list flattened, so the claims a reader sees and the claims under
+ * test cannot drift apart.
  */
 import type { EventKind, SkyEvent } from "../shared/event.ts";
 import { localClock, relativeTime } from "./time.ts";

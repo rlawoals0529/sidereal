@@ -32,50 +32,64 @@ export const RETENTION = {
   ttlMs: 5 * 60_000,
 } as const;
 
-/** What the pointer found under a pixel. `null` is the common case: sky is mostly empty. */
-export type Hit = { at: "event"; id: string } | { at: "person"; id: string } | null;
-
 export type SkyOptions = {
-  /** The yozora palette id. The renderer draws your own star in that palette's accent. */
+  /** The yozora palette id, for a renderer that wants it up front rather than off the cascade. */
   palette: string;
   /**
-   * Passed in rather than read inside the renderer, so the whole page answers one question
-   * the same way. Two components each calling matchMedia is how half a page keeps animating.
+   * Passed in rather than read inside the renderer, so the whole page answers one question the
+   * same way. Two components each calling matchMedia is how half a page keeps animating.
    */
   reducedMotion: boolean;
 };
 
+/**
+ * What this interface needs from a renderer. Five methods, and each one is here because a panel
+ * cannot do its job without it.
+ *
+ * `forward` rather than a method per message: the renderer is driven straight off the wire, so a
+ * message type added to `ServerMessage` reaches it without a change here. That also keeps the
+ * two halves reading the SAME frames, which is what stops the count in the masthead and the
+ * lights on the canvas disagreeing about who is present.
+ */
 export type SkyHandle = {
-  /** One tick of the world. Batched upstream; the renderer is free to batch again. */
-  push(events: readonly SkyEvent[]): void;
-  /** Ring one light so a keyboard user can see which star their cursor is on. `null` clears. */
+  /** Every frame from the socket, verbatim. Safe to call with an empty batch. */
+  forward(message: ServerMessage): void;
+  /**
+   * Ring one light so a keyboard user can see which star their cursor is on. `null` clears.
+   *
+   * This is the one thing on this port that `src/sky` does not expose yet, so the adapter
+   * currently drops it. The register still shows the selection and the evidence panel still
+   * fills, so a keyboard user loses the pointer into the canvas and nothing else.
+   */
   highlight(id: string | null): void;
-  /** Canvas-relative pixels, because that is what a pointer event gives without arithmetic. */
-  hitTest(x: number, y: number): Hit;
+  /**
+   * What is under the cursor, in canvas-relative CSS pixels.
+   *
+   * Returns the event RECORD rather than an id, because the panel prints from the record and
+   * looking it back up here would mean the panel could disagree with the canvas about what a
+   * light was. A visitor under the cursor reads as no hit: a person is not an event, and the
+   * evidence panel only has anything true to say about events.
+   */
+  hitTest(x: number, y: number): SkyEvent | null;
   /** Your own star ignites and holds. Everyone else's drifts. */
   setFocus(on: boolean): void;
-  setPalette(palette: string): void;
-  /** Where this viewer is looking, for the `look` message. Degrees. */
-  look(): { az: number; alt: number };
   destroy(): void;
 };
 
 export type CreateSky = (canvas: HTMLCanvasElement, options: SkyOptions) => SkyHandle;
 
 /**
- * A renderer that draws nothing, for the page before `src/sky/` exists.
+ * A renderer that draws nothing, for a page whose canvas could not start.
  *
  * It reports no hits and ignites no star, which is the only honest thing a stand-in can do
  * here: the one rule of this project is that every light traces to a measured event, so a
  * placeholder that drew anything at all would be the first thing to break it.
  */
 export const nullSky: CreateSky = () => ({
-  push: () => {},
+  forward: () => {},
   highlight: () => {},
   hitTest: () => null,
   setFocus: () => {},
-  setPalette: () => {},
-  look: () => ({ az: 0, alt: 0 }),
   destroy: () => {},
 });
 
@@ -98,15 +112,14 @@ export type LinkHandlers = {
   onStatus(status: Connection): void;
 };
 
-/**
+/*
  * A palette change after connect reaches only your own page.
  *
  * `ClientMessage` has no palette message: `hello` carries it once and there is no update. That
  * is the protocol's call, not ours, and inventing a message type here would put a shape on the
  * wire the other half has never heard of. So the change applies locally now and reaches the
- * rest of the sky on the next connect, and the picker says so rather than pretending.
+ * rest of the sky on the next connect, and the picker says so on screen rather than pretending.
  */
-export const PALETTE_IS_LOCAL_UNTIL_RECONNECT = true;
 
 /** Kinds, in the order the filter offers them. Ordered by how often they arrive. */
 export const KINDS: readonly EventKind[] = ["edit", "quake", "orbit", "aurora"];

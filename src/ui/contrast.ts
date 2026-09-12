@@ -50,6 +50,11 @@ export type Pair = {
  * passes with roughly zero headroom: any opacity, any blend, any future nudge to the palette
  * and it is under. Dim text sits on `--panel` (worst 5.08) or `--bg` (worst 4.80) instead.
  *
+ * **An accent FILL is never also the edge.** `--accent` against `--panel` is 2.23:1 on
+ * moonlit-skyline, so a filled button outlined in its own fill colour has no perceivable
+ * boundary there. The fill stays `--accent`, which is the colour the palette is recognised by;
+ * the edge is `--accent-text`, the same hue taken far enough to be read.
+ *
  * **`--edge-strong` is never used as a control boundary.** yozora holds it to 3:1 against
  * `--bg`, and it hits that exactly (3.00 on plushie-pink), but against `--panel` it is 2.74 and
  * against `--raised` 2.40. Since every control here sits on a panel, the boundary token for a
@@ -73,7 +78,7 @@ export const CHROME_PAIRS: readonly Pair[] = [
   { fg: "dim", bg: "bg", role: "boundary", where: "control border against the page" },
   { fg: "accent-text", bg: "panel", role: "boundary", where: "focus ring on a panel" },
   { fg: "accent-text", bg: "bg", role: "boundary", where: "focus ring on the page" },
-  { fg: "accent", bg: "panel", role: "boundary", where: "ignited-session bar fill" },
+  { fg: "accent-text", bg: "raised", role: "boundary", where: "chosen palette option edge" },
 ];
 
 /** Every palette token this interface is allowed to paint with. Anything in `ui.css` outside

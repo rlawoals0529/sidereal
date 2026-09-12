@@ -151,9 +151,14 @@
   /* Rule 2. base.css reaches for --edge-strong here and that is under 3:1 on a panel. */
   border: 1px solid var(--dim);
 }
+/* An accent FILL is not a boundary. --accent against --panel is 2.23:1 on moonlit-skyline, so
+   a filled control with an accent-coloured edge has no perceivable outline there at all. The
+   edge is --accent-text, which is the same hue taken far enough to be seen: 5.08:1 worst case
+   against the panel. The fill stays --accent, because that is the colour the palette is
+   recognised by and repainting it to satisfy an outline would be the wrong trade. */
 .filters button[aria-pressed="true"] {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   color: var(--on-accent);
   font-weight: 600;
 }
@@ -228,7 +233,8 @@
   padding: 10px 18px;
   font-weight: 600;
   background: var(--accent);
-  border: 1px solid var(--accent);
+  /* See the note on the pressed filter chip: the fill is --accent, the EDGE is --accent-text. */
+  border: 1px solid var(--accent-text);
   color: var(--on-accent);
   border-radius: calc(var(--radius) - 4px);
   cursor: pointer;
@@ -317,7 +323,7 @@ kbd {
   cursor: pointer;
   text-align: left;
 }
-.palette__option[aria-checked="true"] { border-color: var(--accent); border-width: 2px; padding: 5px 9px; }
+.palette__option[aria-checked="true"] { border-color: var(--accent-text); border-width: 2px; padding: 5px 9px; }
 .palette__swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; border: 1px solid var(--dim); }
 .palette__note { font-size: 11.5px; color: var(--dim); }
 

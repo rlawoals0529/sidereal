@@ -19,11 +19,14 @@
  * `setPalette` call here would be a second path to the same state, and two paths to one state is
  * how they end up disagreeing.
  *
- * **`highlight` has nowhere to land.** The renderer has no method for ringing a light by id, so
- * it is dropped rather than faked. What the renderer would need is either `highlight(id)` or a
- * `locate(id)` returning the CSS pixel the light was drawn at, which would let this side draw
- * the ring. Until then a keyboard user gets the register selection and the evidence panel, and
- * loses only the pointer back into the canvas.
+ * **The highlight ring is a DOM element, not a draw call.** `src/sky` answers `locate(id)` with
+ * where a light currently is, and the ring is drawn here, over the canvas. That is not squeamish
+ * about WebGL: a ring drawn by the renderer would be a draw call backed by no event, and the
+ * provenance audit would be right to refuse it. The cursor is the reader's, not the sky's.
+ *
+ * The ring follows on its own frame loop because the sky keeps turning under a stationary
+ * cursor. A one-shot placement would be correct for a few hundred milliseconds and then quietly
+ * wrong, which is worse than no ring, since it would be pointing confidently at the wrong star.
  */
 import type { SkyEvent } from "../shared/event.ts";
 import type { SkyHandle, SkyOptions } from "./ports.ts";
@@ -34,6 +37,7 @@ type Renderer = {
   handle(message: Parameters<SkyHandle["forward"]>[0]): void;
   setFocus(id: string, on: boolean): void;
   hitTest(x: number, y: number, radiusPx?: number): { event: SkyEvent | null } | null;
+  locate(id: string): { x: number; y: number } | null;
   start(): void;
   destroy(): void;
 };
@@ -55,6 +59,33 @@ export function adaptSky(
   /** Held so that a focus session that began before `welcome` still ignites when the id lands. */
   let focused = false;
 
+  let ringed: string | null = null;
+  let ringFrame = 0;
+  /**
+   * Absolutely positioned over the canvas, and `aria-hidden` because it says nothing a screen
+   * reader has not already been told: the register entry it mirrors carries the name and the
+   * evidence panel carries the detail. A second announcement of the same light would be noise.
+   */
+  const ring = canvas.ownerDocument.createElement("div");
+  ring.className = "sky-ring";
+  ring.hidden = true;
+  ring.setAttribute("aria-hidden", "true");
+  canvas.parentElement?.insertBefore(ring, canvas.nextSibling);
+
+  const placeRing = () => {
+    ringFrame = 0;
+    if (ringed === null) return;
+    const at = sky.locate(ringed);
+    // A light that is not on screen has aged out or is below the horizon, and both are ordinary.
+    // Hiding is the only honest answer; a last known position would be a guess drawn confidently.
+    ring.hidden = at === null;
+    if (at) {
+      ring.style.left = `${at.x}px`;
+      ring.style.top = `${at.y}px`;
+    }
+    ringFrame = requestAnimationFrame(placeRing);
+  };
+
   return {
     forward(message) {
       if (message.t === "welcome") {
@@ -65,7 +96,17 @@ export function adaptSky(
       }
       sky.handle(message);
     },
-    highlight() {},
+    highlight(id) {
+      if (id === ringed) return;
+      ringed = id;
+      if (ringFrame) cancelAnimationFrame(ringFrame);
+      ringFrame = 0;
+      if (id === null) {
+        ring.hidden = true;
+        return;
+      }
+      placeRing();
+    },
     hitTest(x, y) {
       // A visitor under the cursor comes back with `event: null`, and that is a miss as far as
       // the evidence panel is concerned.
@@ -75,6 +116,10 @@ export function adaptSky(
       focused = on;
       if (selfId) sky.setFocus(selfId, on);
     },
-    destroy: () => sky.destroy(),
+    destroy() {
+      if (ringFrame) cancelAnimationFrame(ringFrame);
+      ring.remove();
+      sky.destroy();
+    },
   };
 }

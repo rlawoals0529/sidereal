@@ -380,3 +380,31 @@ kbd {
   white-space: nowrap;
   border: 0;
 }
+
+/* The keyboard cursor's ring, drawn here rather than by the renderer.
+   A ring the sky drew would be a draw call with no event behind it, and the provenance audit
+   would refuse it. This is the reader's cursor, not one of the sky's lights.
+   --accent-text rather than --accent: the fill token measures 2.23:1 against --panel on
+   moonlit-skyline, and this sits over the canvas where it has even less to work with. */
+.sky-ring {
+  /* Fixed, not absolute, because the canvas it points into is fixed and inset 0. Its pixels are
+     viewport pixels, so anything else would need a positioned ancestor and would still drift the
+     moment the page scrolled. */
+  position: fixed;
+  z-index: 1;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid var(--accent-text);
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px var(--bg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sky-ring {
+    /* Position is written every frame, so only the radius is transitioned. Naming the property
+       matters here: `all` would animate left and top and the ring would lag the star it rings. */
+    transition: width 120ms ease-out, height 120ms ease-out;
+  }
+}

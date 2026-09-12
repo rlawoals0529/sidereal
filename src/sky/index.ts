@@ -118,6 +118,13 @@ export type Sky = {
   resize(): void;
   /** What is under the cursor, in CSS pixels relative to the canvas. */
   hitTest(x: number, y: number, radiusPx?: number): Hit | null;
+  /**
+   * Where the light for a record is drawn right now, in canvas pixels, or null if it is not.
+   *
+   * The inverse of `hitTest`, for pointing at a light the keyboard selected rather than the
+   * pointer. Null means not on screen, and a caller must draw nothing rather than guess.
+   */
+  locate(id: string): { x: number; y: number } | null;
   /** Every light on screen, checked against the record it was drawn from. */
   audit(): Audit;
   /** The same check, as an assertion. Throws naming every violation. */
@@ -362,6 +369,7 @@ export function createSky(canvas: HTMLCanvasElement, options: SkyOptions = {}): 
     },
 
     hitTest: (x, y, r) => scene.hitTest(x, y, r),
+    locate: (id) => scene.locate(id),
 
     audit: () => scene.runAudit(renderer?.draws() ?? []),
 

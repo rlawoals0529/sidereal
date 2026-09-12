@@ -606,20 +606,10 @@ export class Scene {
     let best: Hit | null = null;
     let bestDist = radiusCss;
 
-    /** To CSS pixels about the centre, with the conformal factor the caller needs for sizes. */
-    const project = (
-      dec: number,
-      ra: number,
-      alreadyHorizontal = false,
-    ): { x: number; y: number; k: number; alt: number; az: number } | null => {
-      const h = alreadyHorizontal ? { alt: dec, az: ra } : horizontal({ dec, ra }, f.lst, f.sinPhi, f.cosPhi);
-      if (h.alt <= 0) return null;
-      const v = localVec(h);
-      const p = stereographic(v, f);
-      if (!p) return null;
-      const z = v.x * f.forward.x + v.y * f.forward.y + v.z * f.forward.z;
-      return { x: p.x * s, y: p.y * s, k: 2 / (1 + z), alt: h.alt, az: h.az };
-    };
+    // Shared with `locate`, because the two answer different questions and must still agree
+    // on where every light is.
+    const project = (dec: number, ra: number, alreadyHorizontal = false) =>
+      this.projectDrawn(dec, ra, alreadyHorizontal);
 
     // Meteors: distance to the streak, which is a segment, not to the point it grew from.
     for (const slot of this.meteors.liveSlots()) {
@@ -670,16 +660,7 @@ export class Scene {
       const o = slot * DISC_STRIDE;
       const p = project(d[o]!, d[o + 1]!, d[o + 9]! > 0.5);
       if (!p) continue;
-      // Mirrored from DISC_VERT. Change the wobble there and you must change it here, or
-      // hovering a drifting star picks up where it was rather than where it is.
-      const driftPx = d[o + 8]!;
-      let hx = p.x;
-      let hy = p.y;
-      if (driftPx > 0 && !this.opts.reducedMotion) {
-        const seed = d[o + 13]!;
-        hx += driftPx * Math.sin(nowSec * 0.11 + seed * 6.2832);
-        hy += driftPx * Math.sin(nowSec * 0.083 + seed * 9.911);
-      }
+      const { x: hx, y: hy } = this.discDrawnPoint(o, p.x, p.y, nowSec);
       const dist = Math.hypot(px - hx, py - hy);
       if (dist >= bestDist) continue;
       const backing = this.backingOf(this.discs.slotBacking(slot));
@@ -701,6 +682,113 @@ export class Scene {
     }
 
     return best;
+  }
+
+  /**
+   * Where a point on the celestial sphere lands right now, in CSS pixels about the centre.
+   *
+   * Extracted so `hitTest` and `locate` cannot disagree. They answer opposite questions, what
+   * is under this pixel and where is this record, but both depend on the same projection, and
+   * two copies of a projection drift the moment one of them is tuned.
+   */
+  private projectDrawn(
+    dec: number,
+    ra: number,
+    alreadyHorizontal = false,
+  ): { x: number; y: number; k: number; alt: number; az: number } | null {
+    const f = this.frame;
+    const s = this.scale / this.dpr;
+    const h = alreadyHorizontal ? { alt: dec, az: ra } : horizontal({ dec, ra }, f.lst, f.sinPhi, f.cosPhi);
+    if (h.alt <= 0) return null;
+    const v = localVec(h);
+    const p = stereographic(v, f);
+    if (!p) return null;
+    const z = v.x * f.forward.x + v.y * f.forward.y + v.z * f.forward.z;
+    return { x: p.x * s, y: p.y * s, k: 2 / (1 + z), alt: h.alt, az: h.az };
+  }
+
+  /**
+   * Where a disc is actually drawn, wobble included.
+   *
+   * Mirrored from DISC_VERT. Change the wobble there and you must change it here, or hovering
+   * a drifting star picks up where it was rather than where it is. One copy on this side,
+   * shared by `hitTest` and `locate`, so the mirror stays a pair rather than becoming a trio.
+   */
+  private discDrawnPoint(o: number, x: number, y: number, nowSec: number): { x: number; y: number } {
+    const driftPx = this.discs.data[o + 8]!;
+    if (!(driftPx > 0) || this.opts.reducedMotion) return { x, y };
+    const seed = this.discs.data[o + 13]!;
+    return {
+      x: x + driftPx * Math.sin(nowSec * 0.11 + seed * 6.2832),
+      y: y + driftPx * Math.sin(nowSec * 0.083 + seed * 9.911),
+    };
+  }
+
+  /**
+   * Where the light for a record is on screen right now, or null if it is not drawn.
+   *
+   * The inverse of `hitTest`, and it exists for the keyboard. Someone arrowing through the
+   * register has selected a record, and without this there is no way to point back at the light
+   * it belongs to: the ring would have to be guessed. A caller draws that ring in the DOM rather
+   * than here on purpose, because a ring drawn by this renderer would be a draw call with no
+   * backing event and the provenance audit would be right to refuse it.
+   *
+   * **Null is a real answer and must be drawn as nothing.** It means the light is genuinely not
+   * on screen, either because it has aged out of its layer or because that part of the sky is
+   * below the horizon, and both are ordinary. A caller that falls back to a plausible position
+   * is inventing one, which is the same failure the placement rules exist to prevent.
+   */
+  locate(id: string): { x: number; y: number } | null {
+    const nowSec = (this.nowMs - this.epochMs) / 1000;
+    const cx = this.widthCss / 2;
+    const cy = this.heightCss / 2;
+    /** Canvas pixels, matching `hitOf`, so a ring lands where a pointer would have hit. */
+    const at = (x: number, y: number) => ({ x: cx + x, y: cy - y });
+
+    const matches = (key: string | null): boolean => {
+      const b = this.backingOf(key);
+      if (!b) return false;
+      return b.of === "event" ? b.event.id === id : b.presence.id === id;
+    };
+
+    // Meteors report the head of the streak, not the point it grew from, because the head is
+    // where the eye is and where the streak's own hit test is closest.
+    for (const slot of this.meteors.liveSlots()) {
+      if (!matches(this.meteors.slotBacking(slot))) continue;
+      const d = this.meteors.data;
+      const o = slot * STREAK_STRIDE;
+      const dec = d[o]!;
+      const ra = d[o + 1]!;
+      const p = this.projectDrawn(dec, ra);
+      if (!p) return null;
+      const drawn = smoothstep01(clamp01((nowSec - d[o + 2]!) / (METEOR_DRAW_S * this.exposure)));
+      const len =
+        (METEOR_MIN_DEG + (METEOR_MAX_DEG - METEOR_MIN_DEG) * d[o + 3]!) * DEG * p.k * (this.scale / this.dpr) * drawn;
+      const dir = diurnalDirection({ dec, ra }, this.frame);
+      return at(p.x + (dir?.dx ?? 0) * len, p.y + (dir?.dy ?? 0) * len);
+    }
+
+    // A quake reports its centre, which is where the epicentre is, even though the hit test
+    // wants the circumference. A ring around a ring would be unreadable.
+    for (const slot of this.quakes.liveSlots()) {
+      if (!matches(this.quakes.slotBacking(slot))) continue;
+      const d = this.quakes.data;
+      const o = slot * RING_STRIDE;
+      const p = this.projectDrawn(d[o]!, d[o + 1]!);
+      return p ? at(p.x, p.y) : null;
+    }
+
+    for (const slot of this.discs.liveSlots()) {
+      if (!matches(this.discs.slotBacking(slot))) continue;
+      const d = this.discs.data;
+      const o = slot * DISC_STRIDE;
+      const p = this.projectDrawn(d[o]!, d[o + 1]!, d[o + 9]! > 0.5);
+      if (!p) return null;
+      const q = this.discDrawnPoint(o, p.x, p.y, nowSec);
+      return at(q.x, q.y);
+    }
+
+    return null;
   }
 
   private backingOf(key: string | null): ReturnType<Ledger["get"]> {

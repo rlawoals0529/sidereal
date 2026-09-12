@@ -1,0 +1,92 @@
+[
+  {
+    "id": "amethyst-yokai",
+    "label": "Amethyst Yokai",
+    "accent": "#d1364a",
+    "scheme": "dark"
+  },
+  {
+    "id": "cherry-blossom-dusk",
+    "label": "Cherry Blossom Dusk",
+    "accent": "#c2477a",
+    "scheme": "light"
+  },
+  {
+    "id": "coral-horizon",
+    "label": "Coral Horizon",
+    "accent": "#ff8f6b",
+    "scheme": "dark"
+  },
+  {
+    "id": "falling-stars",
+    "label": "Falling Stars",
+    "accent": "#6f7fd6",
+    "scheme": "light"
+  },
+  {
+    "id": "moonlit-skyline",
+    "label": "Moonlit Skyline",
+    "accent": "#e0a13f",
+    "scheme": "light"
+  },
+  {
+    "id": "moonlit-village",
+    "label": "Moonlit Village",
+    "accent": "#6fa4e8",
+    "scheme": "dark"
+  },
+  {
+    "id": "neko-lantern",
+    "label": "Neko Lantern",
+    "accent": "#d9663f",
+    "scheme": "light"
+  },
+  {
+    "id": "plushie-pink",
+    "label": "Plushie Pink",
+    "accent": "#d94f9e",
+    "scheme": "light"
+  },
+  {
+    "id": "rain-lantern",
+    "label": "Rain Lantern",
+    "accent": "#ff7a4d",
+    "scheme": "dark"
+  },
+  {
+    "id": "rooftop-dusk",
+    "label": "Rooftop Dusk",
+    "accent": "#f2789e",
+    "scheme": "dark"
+  },
+  {
+    "id": "sakura-lake",
+    "label": "Sakura Lake",
+    "accent": "#e0932c",
+    "scheme": "light"
+  },
+  {
+    "id": "sakura-road",
+    "label": "Sakura Road",
+    "accent": "#e0559c",
+    "scheme": "light"
+  },
+  {
+    "id": "starfall-dusk",
+    "label": "Starfall Dusk",
+    "accent": "#ff5f78",
+    "scheme": "dark"
+  },
+  {
+    "id": "twilight-comet",
+    "label": "Twilight Comet",
+    "accent": "#8b7cf6",
+    "scheme": "dark"
+  },
+  {
+    "id": "wisteria-alley",
+    "label": "Wisteria Alley",
+    "accent": "#8b6fd1",
+    "scheme": "light"
+  }
+]

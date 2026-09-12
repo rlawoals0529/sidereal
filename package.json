@@ -7,11 +7,15 @@
     "build": "vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "measure": "node --experimental-strip-types test/measure.ts"
+    "measure": "node --experimental-strip-types test/measure.ts",
+    "smoke": "node test/worker/smoke.mjs",
+    "sweep": "node test/ui/contrast-sweep.mjs",
+    "keys": "node test/ui/keyboard-walk.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.9.2",
+    "vite": "^6.0.0",
     "vitest": "^2.1.9"
   }
 }

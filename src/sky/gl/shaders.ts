@@ -23,10 +23,10 @@ out float vAcross;
 out float vHot;
 out float vAlpha;
 
-const float METEOR_LIFE_S = 2.2;
-const float METEOR_DRAW_S = 0.42;
-const float METEOR_MIN_DEG = 0.5;
-const float METEOR_MAX_DEG = 6.0;
+const float METEOR_LIFE_S = 7.0;
+const float METEOR_DRAW_S = 0.9;
+const float METEOR_MIN_DEG = 0.9;
+const float METEOR_MAX_DEG = 11.0;
 
 void main() {
   float life = METEOR_LIFE_S * uExposure;

@@ -111,7 +111,10 @@ describe("the still composition", () => {
     const still = stillScene();
     const moving = new Scene(sceneOptions({ palette: TWILIGHT, observer: HERE, epochMs: T }));
     moving.resize(900, 900, 1);
-    const batch = Array.from({ length: 900 }, (_, i) => edit(T - (900 - i) * 10));
+    // Spread across forty seconds on purpose. The window has to be longer than the still
+    // exposure or both skies keep everything and this measures the fixture instead of the
+    // exposure, which is what happened when the meteor lifetime went from 2.2 seconds to 7.
+    const batch = Array.from({ length: 900 }, (_, i) => edit(T - (900 - i) * 45));
     still.push(batch);
     moving.push(batch);
     still.update(T);

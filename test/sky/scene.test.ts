@@ -325,7 +325,10 @@ describe("with motion reduced", () => {
     const moving = sky({ reducedMotion: false });
     // Oldest first, which is the order a feed delivers a tick in. See the out-of-order case
     // below for what happens when it is not.
-    const batch = Array.from({ length: 400 }, (_, i) => edit(T - (400 - i) * 20));
+    // Spread across forty seconds on purpose. The window has to be longer than the still
+    // exposure or both skies keep everything and this measures the fixture instead of the
+    // exposure, which is what happened when the meteor lifetime went from 2.2 seconds to 7.
+    const batch = Array.from({ length: 400 }, (_, i) => edit(T - (400 - i) * 100));
     still.push(batch);
     moving.push(batch);
     still.update(T);

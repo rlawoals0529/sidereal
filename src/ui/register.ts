@@ -61,11 +61,42 @@ export const emptyRegister = (): Register => ({
  * stream of separate events, so a handful of cells represents it honestly and the rest belong
  * on the canvas as a band. The Aurora tab still has real content; it just cannot take the room.
  */
+/**
+ * What leads the list, and why it is not simply what arrived last.
+ *
+ * Sorting purely by time sounds neutral and is not. One aurora refresh is dozens of cells
+ * landing in the same second, so the top of the list was permanently aurora and an earthquake
+ * four minutes old sat below ten rows of "Aurora, 6% chance of visibility". The reader saw the
+ * least informative thing the sky had, ranked first, forever.
+ *
+ * So the list leads with what is rare. A quake is a handful an hour, the station passes on a
+ * schedule, edits run to a few a second, and aurora cells arrive in dozens at a time: that
+ * ordering is roughly the inverse of how often each feed speaks, which is a fair proxy for how
+ * much a given row tells you. Within a kind it is still newest first.
+ *
+ * This is ranking, not filtering. Nothing is hidden, every kind keeps its own tab, and the
+ * quota above already decides how many of each are held. This only decides reading order.
+ */
+const LEADS: Record<EventKind, number> = {
+  quake: 0,
+  orbit: 1,
+  edit: 2,
+  aurora: 3,
+};
+
 const PER_KIND_CAP: Record<EventKind, number> = {
   aurora: 10,
   edit: 40,
   quake: 40,
-  orbit: 6,
+  /**
+   * One, because there is one space station.
+   *
+   * Every poll produces a fresh fix, so a quota of six filled the list with six rows saying
+   * "International Space Station, 423 km up" at five second intervals. A position is a state
+   * rather than an event: the useful row is where it is now, and the older fixes are the trail
+   * behind it on the canvas, which is where a track belongs.
+   */
+  orbit: 1,
 };
 
 function settle(events: readonly SkyEvent[], now: number): SkyEvent[] {
@@ -76,7 +107,7 @@ function settle(events: readonly SkyEvent[], now: number): SkyEvent[] {
     seen.add(e.id);
     kept.push(e);
   }
-  kept.sort((a, b) => b.at - a.at);
+  kept.sort((a, b) => LEADS[a.kind] - LEADS[b.kind] || b.at - a.at);
   const fresh = kept.filter((e) => now - e.at <= RETENTION.ttlMs);
 
   // Applied after the sort, so each kind keeps its most recent rather than whichever happened

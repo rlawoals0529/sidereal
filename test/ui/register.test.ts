@@ -145,10 +145,37 @@ describe("moving", () => {
 
 describe("filtering", () => {
   it("shows one feed and puts the cursor back on something visible", () => {
-    let state = ingest(emptyRegister(), [event("a", 10, "edit"), event("q", 20, "quake")], NOW);
+    // Two edits, so the leading row is an edit under either ordering and this test stays about
+    // the cursor following the filter rather than about which kind leads.
+    let state = ingest(
+      emptyRegister(),
+      [event("a", 10, "edit"), event("b", 20, "edit"), event("q", 30, "quake")],
+      NOW,
+    );
+    state = setFilter(state, "edit");
     expect(cursorEvent(state)?.id).toBe("a");
     state = setFilter(state, "quake");
     expect(visible(state).map((e) => e.id)).toEqual(["q"]);
     expect(cursorEvent(state)?.id).toBe("q");
+  });
+
+  it("leads with the rarer feed rather than simply the newest thing", () => {
+    // Pure recency put an aurora refresh at the top of the list permanently, because dozens of
+    // cells land in the same second. The quake here is the oldest event and still leads.
+    const aurora = Array.from({ length: 20 }, (_, i) => event(`a${i}`, i, "aurora"));
+    const state = ingest(emptyRegister(), [...aurora, event("q", 200, "quake")], NOW);
+    expect(visible(state)[0]?.id).toBe("q");
+  });
+});
+
+describe("one object, one row", () => {
+  it("keeps a single station rather than one row per position fix", () => {
+    // The ISS reports every few seconds and each fix is a new event, so the list filled with
+    // rows that all said the same thing. A position is a state, not an event: the row is where
+    // it is now, and the older fixes are the trail behind it on the canvas.
+    const fixes = Array.from({ length: 12 }, (_, i) => event(`iss${i}`, i * 5, "orbit"));
+    const shown = visible(ingest(emptyRegister(), fixes, NOW));
+    expect(shown.filter((e) => e.kind === "orbit")).toHaveLength(1);
+    expect(shown.find((e) => e.kind === "orbit")?.id).toBe("iss0");
   });
 });

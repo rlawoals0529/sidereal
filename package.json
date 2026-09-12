@@ -8,5 +8,10 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "measure": "node --experimental-strip-types test/measure.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.9"
   }
 }

@@ -1,0 +1,27 @@
+{
+  "name": "sidereal",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-01",
+
+  "durable_objects": {
+    "bindings": [{ "name": "SKY", "class_name": "Sky" }]
+  },
+
+  // `new_sqlite_classes`, not `new_classes`. The SQLite storage backend is the only one
+  // available on the Workers Free plan, and the choice is made once at class creation and
+  // cannot be changed afterwards - a class created with `new_classes` stays on the
+  // key-value backend forever and simply will not run on a free account.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sky"] }],
+
+  // The watchdog. One minute is cron's floor and also the longest a dead feed schedule
+  // should stay dead. The real poll cadence is the object's alarm; see `src/worker/feeds.ts`.
+  "triggers": { "crons": ["* * * * *"] },
+
+  "observability": { "enabled": true }
+
+  // No `vars` block on purpose. INGEST_TOKEN is a secret, not a var: a var is committed
+  // plaintext in this file. `npx wrangler secret put INGEST_TOKEN`, and `.dev.vars` locally.
+  //
+  // The UI slice adds its own `assets` binding here when it has something to serve. This
+  // worker 404s everything it does not own, so adding one will not collide.
+}

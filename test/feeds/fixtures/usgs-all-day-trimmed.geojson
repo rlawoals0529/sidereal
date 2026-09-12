@@ -1,0 +1,501 @@
+{
+ "type": "FeatureCollection",
+ "metadata": {
+  "generated": 1789243127000,
+  "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
+  "title": "USGS All Earthquakes, Past Day",
+  "status": 200,
+  "api": "2.7.0",
+  "count": 12
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 0.1,
+    "place": "11 km S of Anza, CA",
+    "time": 1789176480740,
+    "updated": 1789176682862,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/ci41545048",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/ci41545048.geojson",
+    "felt": null,
+    "cdi": null,
+    "mmi": null,
+    "alert": null,
+    "status": "automatic",
+    "tsunami": 0,
+    "sig": 0,
+    "net": "ci",
+    "code": "41545048",
+    "ids": ",ci41545048,",
+    "sources": ",ci,",
+    "types": ",nearby-cities,origin,phase-data,",
+    "nst": 21,
+    "dmin": 0.06061,
+    "rms": 0.14,
+    "gap": 57,
+    "magType": "ml",
+    "type": "earthquake",
+    "title": "M 0.1 - 11 km S of Anza, CA"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -116.6555,
+     33.4535,
+     3.19
+    ]
+   },
+   "id": "ci41545048"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 0.51,
+    "place": "9 km WSW of Anza, CA",
+    "time": 1789233599670,
+    "updated": 1789233808153,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/ci41546224",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/ci41546224.geojson",
+    "felt": null,
+    "cdi": null,
+    "mmi": null,
+    "alert": null,
+    "status": "automatic",
+    "tsunami": 0,
+    "sig": 4,
+    "net": "ci",
+    "code": "41546224",
+    "ids": ",ci41546224,",
+    "sources": ",ci,",
+    "types": ",nearby-cities,origin,phase-data,",
+    "nst": 22,
+    "dmin": 0.04068,
+    "rms": 0.13,
+    "gap": 40,
+    "magType": "ml",
+    "type": "earthquake",
+    "title": "M 0.5 - 9 km WSW of Anza, CA"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -116.760333333333,
+     33.5098333333333,
+     1.94
+    ]
+   },
+   "id": "ci41546224"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 1,
+    "place": "5 km SW of Susitna North, Alaska",
+    "time": 1789238957580,
+    "updated": 1789239026529,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/aka2026scpfnk",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/aka2026scpfnk.geojson",
+    "felt": null,
+    "cdi": null,
+    "mmi": null,
+    "alert": null,
+    "status": "automatic",
+    "tsunami": 0,
+    "sig": 15,
+    "net": "ak",
+    "code": "a2026scpfnk",
+    "ids": ",aka2026scpfnk,",
+    "sources": ",ak,",
+    "types": ",origin,phase-data,",
+    "nst": 7,
+    "dmin": 0.3,
+    "rms": 0.6,
+    "gap": 142,
+    "magType": "ml",
+    "type": "earthquake",
+    "title": "M 1.0 - 5 km SW of Susitna North, Alaska"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -149.914,
+     62.125,
+     10.6
+    ]
+   },
+   "id": "aka2026scpfnk"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 1.5,
+    "place": "11 km SE of Pyote, Texas",
+    "time": 1789230248510,
+    "updated": 1789230646016,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/tx2026rznbpo",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/tx2026rznbpo.geojson",
+    "felt": null,
+    "cdi": null,
+    "mmi": null,
+    "alert": null,
+    "status": "automatic",
+    "tsunami": 0,
+    "sig": 35,
+    "net": "tx",
+    "code": "2026rznbpo",
+    "ids": ",tx2026rznbpo,",
+    "sources": ",tx,",
+    "types": ",origin,phase-data,",
+    "nst": 17,
+    "dmin": 0.3,
+    "rms": 0.9,
+    "gap": 115,
+    "magType": "ml",
+    "type": "earthquake",
+    "title": "M 1.5 - 11 km SE of Pyote, Texas"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -103.04,
+     31.46,
+     0
+    ]
+   },
+   "id": "tx2026rznbpo"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 2,
+    "place": "24 km WNW of Cooper Landing, Alaska",
+    "time": 1789235248127,
+    "updated": 1789236312220,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/aka2026scndwy",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/aka2026scndwy.geojson",
+    "felt": 1,
+    "cdi": 1,
+    "mmi": null,
+    "alert": null,
+    "status": "automatic",
+    "tsunami": 0,
+    "sig": 62,
+    "net": "ak",
+    "code": "a2026scndwy",
+    "ids": ",aka2026scndwy,",
+    "sources": ",ak,",
+    "types": ",dyfi,origin,phase-data,",
+    "nst": 42,
+    "dmin": 0.6,
+    "rms": 0.6,
+    "gap": 59,
+    "magType": "ml",
+    "type": "earthquake",
+    "title": "M 2.0 - 24 km WNW of Cooper Landing, Alaska"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -150.252,
+     60.551,
+     30
+    ]
+   },
+   "id": "aka2026scndwy"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 2.49,
+    "place": "24 km SW of Petrolia, CA",
+    "time": 1789180956870,
+    "updated": 1789182441019,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/nc75434022",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/nc75434022.geojson",
+    "felt": null,
+    "cdi": null,
+    "mmi": null,
+    "alert": null,
+    "status": "automatic",
+    "tsunami": 0,
+    "sig": 95,
+    "net": "nc",
+    "code": "75434022",
+    "ids": ",nc75434022,",
+    "sources": ",nc,",
+    "types": ",nearby-cities,origin,phase-data,scitech-link,",
+    "nst": 10,
+    "dmin": 0.1544,
+    "rms": 0.43,
+    "gap": 289,
+    "magType": "md",
+    "type": "earthquake",
+    "title": "M 2.5 - 24 km SW of Petrolia, CA"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -124.49666595459,
+     40.1886672973633,
+     0.189999997615814
+    ]
+   },
+   "id": "nc75434022"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 2.97307562276326,
+    "place": "25 km ESE of Avalon, CA",
+    "time": 1789211519360,
+    "updated": 1789214296040,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/ci41545872",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/ci41545872.geojson",
+    "felt": null,
+    "cdi": null,
+    "mmi": null,
+    "alert": null,
+    "status": "automatic",
+    "tsunami": 0,
+    "sig": 136,
+    "net": "ci",
+    "code": "41545872",
+    "ids": ",ci41545872,us7000tgyu,",
+    "sources": ",ci,us,",
+    "types": ",focal-mechanism,nearby-cities,origin,phase-data,scitech-link,",
+    "nst": 97,
+    "dmin": 0.2314,
+    "rms": 0.289999992,
+    "gap": 114,
+    "magType": "ml",
+    "type": "earthquake",
+    "title": "M 3.0 - 25 km ESE of Avalon, CA"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -118.071998596191,
+     33.2630004882812,
+     14.2600002288818
+    ]
+   },
+   "id": "ci41545872"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 3.5,
+    "place": "21 km NE of Valdez, Alaska",
+    "time": 1789240685903,
+    "updated": 1789242180468,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/aka2026scqemw",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/aka2026scqemw.geojson",
+    "felt": 11,
+    "cdi": 3.4,
+    "mmi": 3.752,
+    "alert": null,
+    "status": "automatic",
+    "tsunami": 0,
+    "sig": 192,
+    "net": "ak",
+    "code": "a2026scqemw",
+    "ids": ",aka2026scqemw,us7000th1h,",
+    "sources": ",ak,us,",
+    "types": ",dyfi,origin,phase-data,shakemap,",
+    "nst": 165,
+    "dmin": 0.2,
+    "rms": 1.3,
+    "gap": 20,
+    "magType": "ml",
+    "type": "earthquake",
+    "title": "M 3.5 - 21 km NE of Valdez, Alaska"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -146.12,
+     61.29,
+     12.7
+    ]
+   },
+   "id": "aka2026scqemw"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 4.5,
+    "place": "63 km WSW of Santiago, Peru",
+    "time": 1789202798186,
+    "updated": 1789206474066,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000tgy2",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/us7000tgy2.geojson",
+    "felt": 1,
+    "cdi": 2,
+    "mmi": null,
+    "alert": null,
+    "status": "reviewed",
+    "tsunami": 0,
+    "sig": 312,
+    "net": "us",
+    "code": "7000tgy2",
+    "ids": ",us7000tgy2,",
+    "sources": ",us,",
+    "types": ",dyfi,origin,phase-data,",
+    "nst": 42,
+    "dmin": 2.557,
+    "rms": 0.5,
+    "gap": 154,
+    "magType": "mb",
+    "type": "earthquake",
+    "title": "M 4.5 - 63 km WSW of Santiago, Peru"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -76.2161,
+     -14.4855,
+     24.123
+    ]
+   },
+   "id": "us7000tgy2"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 5.1,
+    "place": "South Sandwich Islands region",
+    "time": 1789174508418,
+    "updated": 1789175671040,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000tgvr",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/us7000tgvr.geojson",
+    "felt": null,
+    "cdi": null,
+    "mmi": null,
+    "alert": null,
+    "status": "reviewed",
+    "tsunami": 0,
+    "sig": 400,
+    "net": "us",
+    "code": "7000tgvr",
+    "ids": ",us7000tgvr,",
+    "sources": ",us,",
+    "types": ",origin,phase-data,",
+    "nst": 37,
+    "dmin": 18.986,
+    "rms": 0.95,
+    "gap": 84,
+    "magType": "mb",
+    "type": "earthquake",
+    "title": "M 5.1 - South Sandwich Islands region"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -24.9274,
+     -59.1348,
+     10
+    ]
+   },
+   "id": "us7000tgvr"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 6.5,
+    "place": "126 km NNE of Teluknaga, Indonesia",
+    "time": 1789161835907,
+    "updated": 1789218317606,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000tgrk",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/us7000tgrk.geojson",
+    "felt": 21,
+    "cdi": 3.4,
+    "mmi": 3.013,
+    "alert": "green",
+    "status": "reviewed",
+    "tsunami": 0,
+    "sig": 657,
+    "net": "us",
+    "code": "7000tgrk",
+    "ids": ",us7000tgrk,",
+    "sources": ",us,",
+    "types": ",dyfi,ground-failure,losspager,moment-tensor,origin,phase-data,shakemap,",
+    "nst": 116,
+    "dmin": 5.557,
+    "rms": 0.73,
+    "gap": 23,
+    "magType": "mww",
+    "type": "earthquake",
+    "title": "M 6.5 - 126 km NNE of Teluknaga, Indonesia"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     106.8742,
+     -4.9832,
+     372
+    ]
+   },
+   "id": "us7000tgrk"
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "mag": 0.95,
+    "place": "7 km NNW of La Mesa, CA",
+    "time": 1789159102280,
+    "updated": 1789174667553,
+    "tz": null,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/ci41544920",
+    "detail": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/ci41544920.geojson",
+    "felt": null,
+    "cdi": null,
+    "mmi": null,
+    "alert": null,
+    "status": "reviewed",
+    "tsunami": 0,
+    "sig": 14,
+    "net": "ci",
+    "code": "41544920",
+    "ids": ",ci41544920,",
+    "sources": ",ci,",
+    "types": ",nearby-cities,origin,phase-data,",
+    "nst": 34,
+    "dmin": 0.07722,
+    "rms": 0.26,
+    "gap": 96,
+    "magType": "ml",
+    "type": "quarry blast",
+    "title": "M 1.0 Quarry Blast - 7 km NNW of La Mesa, CA"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -117.057833333333,
+     32.8215,
+     -0.11
+    ]
+   },
+   "id": "ci41544920"
+  }
+ ],
+ "bbox": [
+  -178.46,
+  -59.1348,
+  -0.75999999046326,
+  177.174,
+  68.78,
+  372
+ ]
+}

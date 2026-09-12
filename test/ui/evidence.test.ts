@@ -45,7 +45,7 @@ const quake: SkyEvent = {
 describe("an inferred position can never read as a measured one", () => {
   it("puts the coordinates nowhere except in a row that says they are not a measurement", () => {
     const rows = evidenceRows(describeEvent(edit, NOW));
-    const coords = formatCoords(edit.lat, edit.lon);
+    const coords = formatCoords(edit.lat, edit.lon, edit.kind);
     const carrying = rows.filter((r) => `${r.key} ${r.value}`.includes(coords));
 
     expect(carrying).toHaveLength(1);
@@ -89,7 +89,15 @@ describe("brightness", () => {
 
 describe("formatCoords", () => {
   it("uses hemispheres rather than a minus sign", () => {
-    expect(formatCoords(53.1234, -158.61)).toBe("53.1234 N, 158.6100 W");
-    expect(formatCoords(-33.9, 18.4)).toBe("33.9000 S, 18.4000 E");
+    expect(formatCoords(53.1234, -158.61, "quake")).toBe("53.1234 N, 158.6100 W");
+    expect(formatCoords(-33.9, 18.4, "quake")).toBe("33.9000 S, 18.4000 E");
+  });
+
+  it("prints each kind only as precisely as its source knows", () => {
+    // The bug this replaced read 80.0000 S, 110.0000 W for a cell whose own source calls it
+    // the brightest in a five degree bin. Trailing zeroes are a claim about precision.
+    expect(formatCoords(-80, -110, "aurora")).toBe("80 S, 110 W");
+    expect(formatCoords(51.5074, -0.1278, "edit")).toBe("52 N, 0 W");
+    expect(formatCoords(-33.8688, 151.2093, "quake")).toBe("33.8688 S, 151.2093 E");
   });
 });

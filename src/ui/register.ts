@@ -49,6 +49,25 @@ export const emptyRegister = (): Register => ({
  * double-render" (shared/event.ts), and last-wins would mean a replay quietly reorders the list
  * under anyone reading it even when nothing about the event changed.
  */
+/**
+ * How many of one kind may hold the register at once.
+ *
+ * The list is sorted by time and capped, so without this the loudest feed simply wins. It did:
+ * one aurora refresh is hundreds of cells arriving together, and the register became page after
+ * page of "Aurora, 1% chance of visibility" with the earthquakes and edits pushed off the end.
+ * A reader could not tell the feed was working, let alone what had happened.
+ *
+ * A quota rather than a filter, because the aurora is not noise. It is a field rather than a
+ * stream of separate events, so a handful of cells represents it honestly and the rest belong
+ * on the canvas as a band. The Aurora tab still has real content; it just cannot take the room.
+ */
+const PER_KIND_CAP: Record<EventKind, number> = {
+  aurora: 10,
+  edit: 40,
+  quake: 40,
+  orbit: 6,
+};
+
 function settle(events: readonly SkyEvent[], now: number): SkyEvent[] {
   const seen = new Set<string>();
   const kept: SkyEvent[] = [];
@@ -58,7 +77,20 @@ function settle(events: readonly SkyEvent[], now: number): SkyEvent[] {
     kept.push(e);
   }
   kept.sort((a, b) => b.at - a.at);
-  return kept.filter((e) => now - e.at <= RETENTION.ttlMs).slice(0, RETENTION.capacity);
+  const fresh = kept.filter((e) => now - e.at <= RETENTION.ttlMs);
+
+  // Applied after the sort, so each kind keeps its most recent rather than whichever happened
+  // to arrive first.
+  const room: Record<string, number> = { ...PER_KIND_CAP };
+  const out: SkyEvent[] = [];
+  for (const e of fresh) {
+    const left = room[e.kind] ?? 0;
+    if (left <= 0) continue;
+    room[e.kind] = left - 1;
+    out.push(e);
+    if (out.length >= RETENTION.capacity) break;
+  }
+  return out;
 }
 
 /** One tick of the world. `now` is server time, because `at` is world time (see time.ts). */

@@ -239,8 +239,7 @@ export class Scene {
   private pushAurora(e: SkyEvent): void {
     const key = auroraCellKey(e);
     const eq = celestialPoint(e.lat, e.lon, e.at);
-    // OVATION probability is 0..1 already, and the two numbers here are the difference
-    // between a band and a bruise.
+    // The two numbers here are the difference between a band and a bruise.
     //
     // Cells overlap: the grid is finer than a cell is wide, so roughly eight of them land on
     // any given pixel and the blend is additive. A generous per-cell alpha therefore sums to
@@ -254,7 +253,24 @@ export class Scene {
     //
     // The exponent holds the faint edge of the oval down so the band keeps its shape rather
     // than smearing out to its own threshold.
-    const target = Math.pow(clamp01(e.magnitude), 1.6) * 0.1;
+    // The probability that counts as a full-strength aurora on screen.
+    //
+    // OVATION's scale runs to 100 per cent, and the data does not. A quiet night sits between
+    // two and fifteen per cent and a strong storm reaches the sixties, so mapping the published
+    // number straight onto brightness spends almost the whole display range on values that
+    // never arrive. It showed: a four per cent cell rendered at 0.04^1.6 * 0.1, which is six
+    // hundredths of one per cent alpha, and the band was invisible on a working sky.
+    //
+    // Normalising against a reference is the same move as choosing sensible axis limits on a
+    // chart rather than always starting at zero. It changes no measurement: `magnitude` stays
+    // the probability the feed published and the panel still prints that number. What changes
+    // is how much of the screen's range a real reading gets to use.
+    //
+    // Clamped, so a genuine storm saturates rather than overflowing, and cells above the
+    // reference still read as brighter than everything around them.
+    const AURORA_FULL_AT = 0.35;
+    const norm = clamp01(e.magnitude / AURORA_FULL_AT);
+    const target = Math.pow(norm, 1.6) * 0.1;
     const slot = this.discs.slotFor(key);
     const from = slot === undefined ? 0 : this.currentDiscAlpha(slot);
     const colour = this.opts.palette.aurora;

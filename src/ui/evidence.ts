@@ -74,14 +74,38 @@ export type Evidence = {
 
 /** `50.4500 N, 30.5200 E`. Hemispheres rather than signs: a minus sign is one character away
  *  from being read as a hyphen in a list of two numbers. */
-export function formatCoords(lat: number, lon: number): string {
+/**
+ * Coordinates printed to the precision the source actually has, and no further.
+ *
+ * This read `80.0000 S, 110.0000 W` for an aurora cell. Four decimal places is about eleven
+ * metres, quoted for a value whose own source describes it as the brightest cell in a five
+ * degree bin, which is over five hundred kilometres across. Trailing zeroes are not neutral:
+ * they are a claim about how well something is known, and this panel exists to make exactly
+ * that kind of claim carefully.
+ *
+ * A quake's epicentre really is located to four decimals, so it keeps them. The rule is the
+ * source's resolution, not one format for everything.
+ */
+const DECIMALS: Record<EventKind, number> = {
+  quake: 4,
+  orbit: 2,
+  // A five degree bin. Whole degrees already overstate it, and anything finer is invented.
+  aurora: 0,
+  // A region stands in for a position that was never measured, so decimals would be theatre.
+  edit: 0,
+};
+
+// `kind` is required, with no default. A default here is how a caller silently gets four
+// decimals for a five degree bin, which is the exact bug this function was rewritten to fix.
+export function formatCoords(lat: number, lon: number, kind: EventKind): string {
   const ns = lat >= 0 ? "N" : "S";
   const ew = lon >= 0 ? "E" : "W";
-  return `${Math.abs(lat).toFixed(4)} ${ns}, ${Math.abs(lon).toFixed(4)} ${ew}`;
+  const d = DECIMALS[kind];
+  return `${Math.abs(lat).toFixed(d)} ${ns}, ${Math.abs(lon).toFixed(d)} ${ew}`;
 }
 
 export function describeEvent(event: SkyEvent, serverNow: number): Evidence {
-  const coords = formatCoords(event.lat, event.lon);
+  const coords = formatCoords(event.lat, event.lon, event.kind);
   const placement: Placement = event.placement === "measured"
     ? {
         measured: true,

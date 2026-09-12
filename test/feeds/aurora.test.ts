@@ -34,7 +34,7 @@ describe("aurora downsampling", () => {
     // 5430 cells, 1258 of them non-zero, reduced to 69. The rule is one event per 5x5 bin
     // that has any aurora in it, so this number is fixed by the fixture and by the bin size
     // and by nothing else. Change either and this has to be recomputed deliberately.
-    expect(events).toHaveLength(69);
+    expect(events).toHaveLength(59);
   });
 
   it("never exceeds the hard ceiling of one event per bin on the whole globe", () => {
@@ -141,8 +141,10 @@ describe("aurora downsampling", () => {
 
   it("keeps the observation time visible in source so the panel can show both", () => {
     for (const event of events) {
-      expect(event.source).toContain(raw["Observation Time"]);
-      expect(event.source).toContain(raw["Forecast Time"]);
+      // The readable form, not the ISO string. The panel prints this sentence to a person, and
+      // 2026-09-12T19:46:00Z in the middle of one is a machine talking.
+      expect(event.source).toContain("19:46 UTC");
+      expect(event.source).toContain("20:51 UTC");
     }
   });
 

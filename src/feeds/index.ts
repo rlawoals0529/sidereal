@@ -15,6 +15,7 @@ export {
   AURORA_LON_BINS,
   AURORA_LAT_BINS,
   AURORA_MAX_EVENTS,
+  AURORA_MIN_PERCENT,
 } from "./aurora.ts";
 export { WIKI_REGIONS, regionForWikiDomain } from "./wiki-regions.ts";
 export type { WikiRegion } from "./wiki-regions.ts";

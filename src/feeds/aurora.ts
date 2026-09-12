@@ -49,6 +49,38 @@ import { linearOn } from "./curve.ts";
  */
 export const AURORA_BIN_DEGREES = 5;
 
+/**
+ * The probability below which a cell is not a light.
+ *
+ * NOAA publishes a value for most of the globe and most of it is near zero. Emitting all of it
+ * put roughly 873 cells on the wire every refresh, which was about 97 per cent of everything
+ * the sky ever received: earthquakes and edits were a rounding error behind a wall of identical
+ * "Aurora, 1% chance of visibility" entries.
+ *
+ * The threshold is a display decision and it is the same kind as dropping bot edits. A one per
+ * cent chance drawn as a light is not a faint truth, it is a claim of presence where the
+ * measurement says there is effectively none, so leaving it out is the more honest rendering as
+ * well as the more legible one.
+ *
+ * Two per cent, not five. Five looked tidy and cut the fixture from 873 cells to 34, which is
+ * not enough to draw a band at all: the aurora is a field and needs cells to have a shape. The
+ * register flooding is fixed where it belongs, by a per-kind quota in the list itself.
+ *
+ * It is a floor, not a cap. During a real geomagnetic storm far more cells clear it and the
+ * band grows, which is exactly what should happen.
+ */
+export const AURORA_MIN_PERCENT = 2;
+
+/** Human, not ISO. `2026-09-12T22:48:00Z` in a sentence is a machine talking to a person. */
+function readableUtc(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = new Date(t);
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${hh}:${mm} UTC`;
+}
+
 /** 360 degrees of longitude at 5 degrees per bin. */
 export const AURORA_LON_BINS = 360 / AURORA_BIN_DEGREES;
 
@@ -144,10 +176,12 @@ export function normalizeAuroraEvents(rawJson: string): SkyEvent[] {
     }
   }
 
-  const observedNote = observationTime === undefined ? "" : ` Observed ${observationTime}.`;
+  const observedNote =
+    observationTime === undefined ? "" : ` Observed ${readableUtc(observationTime)}.`;
   const events: SkyEvent[] = [];
 
   for (const peak of peaks.values()) {
+    if (peak.probability < AURORA_MIN_PERCENT) continue;
     events.push({
       /**
        * Keyed by the forecast time and the peak cell, so re-fetching the same refresh
@@ -164,7 +198,7 @@ export function normalizeAuroraEvents(rawJson: string): SkyEvent[] {
       placement: "measured",
       magnitude: auroraMagnitude(peak.probability),
       label: `Aurora, ${peak.probability}% chance of visibility`,
-      source: `NOAA OVATION. Forecast for ${forecastTime}, brightest cell in a ${AURORA_BIN_DEGREES} degree bin.${observedNote}`,
+      source: `NOAA OVATION, forecast for ${readableUtc(forecastTime)}, brightest cell in a ${AURORA_BIN_DEGREES} degree bin.${observedNote}`,
     });
   }
 

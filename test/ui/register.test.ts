@@ -48,11 +48,40 @@ describe("ingest", () => {
   });
 
   it("drops what the sky has already retired, by age and then by count", () => {
+    // Mixed kinds on purpose. Every event being an edit would hit the per-kind quota first and
+    // this would be testing that instead, which is a different guard with its own test below.
     const old = event("old", RETENTION.ttlMs / 1000 + 60);
-    const many = Array.from({ length: RETENTION.capacity + 20 }, (_, i) => event(`n${i}`, i));
+    const kinds = ["edit", "quake"] as const;
+    const many = Array.from({ length: RETENTION.capacity + 20 }, (_, i) =>
+      event(`n${i}`, i, kinds[i % kinds.length]),
+    );
     const state = ingest(emptyRegister(), [old, ...many], NOW);
     expect(visible(state)).toHaveLength(RETENTION.capacity);
     expect(visible(state).some((e) => e.id === "old")).toBe(false);
+  });
+
+  it("does not let one loud feed take the whole list", () => {
+    // One aurora refresh is hundreds of cells at once. Without a per-kind quota it filled the
+    // register and pushed every earthquake and edit off the end, so the page looked like a
+    // single broken feed repeating itself.
+    const aurora = Array.from({ length: 300 }, (_, i) => event(`a${i}`, i, "aurora"));
+    // Older than every aurora cell but still inside the retention window, so this measures the
+    // quota rather than accidentally measuring the age filter.
+    const quakes = Array.from({ length: 5 }, (_, i) => event(`q${i}`, 250 + i, "quake"));
+    const state = ingest(emptyRegister(), [...aurora, ...quakes], NOW);
+
+    const shown = visible(state);
+    const auroraShown = shown.filter((e) => e.kind === "aurora").length;
+    expect(auroraShown).toBeLessThanOrEqual(10);
+    // The point of the quota: the quiet feed survives even though it arrived last and oldest.
+    expect(shown.filter((e) => e.kind === "quake")).toHaveLength(5);
+  });
+
+  it("keeps the most recent of a kind, not the first to arrive", () => {
+    const older = Array.from({ length: 20 }, (_, i) => event(`old${i}`, 200 + i, "aurora"));
+    const newer = Array.from({ length: 20 }, (_, i) => event(`new${i}`, i, "aurora"));
+    const shown = visible(ingest(emptyRegister(), [...older, ...newer], NOW));
+    expect(shown.every((e) => e.id.startsWith("new"))).toBe(true);
   });
 });
 

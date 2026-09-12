@@ -125,10 +125,33 @@ describe("the aurora", () => {
   });
 
   it("is brighter where the measured probability is higher, and nowhere else", () => {
+    // Both values sit in the range OVATION actually publishes on an ordinary night, so this
+    // measures the curve rather than the saturation at the top of it. Picking 0.95 here, as
+    // this once did, tested the clamp by accident and said nothing about a real sky.
     const s = sky();
-    s.push([aurora(T, 66, -140, 0.2), aurora(T, 66, -139, 0.95)]);
+    s.push([aurora(T, 66, -140, 0.04), aurora(T, 66, -139, 0.16)]);
     const alphaAt = (slot: number): number => s.discs.data[slot * DISC_STRIDE + 3]!;
     expect(alphaAt(1)).toBeGreaterThan(alphaAt(0) * 3);
+  });
+
+  it("saturates rather than overflowing when a real storm arrives", () => {
+    // A storm reading is far above the reference the display is scaled to. It must pin to full
+    // strength instead of running past it, and it must still be plainly brighter than a quiet
+    // cell next to it.
+    const s = sky();
+    s.push([aurora(T, 66, -140, 0.05), aurora(T, 66, -139, 0.9)]);
+    const alphaAt = (slot: number): number => s.discs.data[slot * DISC_STRIDE + 3]!;
+    expect(alphaAt(1)).toBeLessThanOrEqual(0.1 + 1e-6);
+    expect(alphaAt(1)).toBeGreaterThan(alphaAt(0) * 4);
+  });
+
+  it("gives an ordinary night enough brightness to be seen at all", () => {
+    // The failure this replaced: probability was mapped straight onto alpha, so a four per
+    // cent cell drew at 0.00057 and the band was invisible on a perfectly working sky. The
+    // number below is not a target for how it should look, it is a floor under "visible".
+    const s = sky();
+    s.push([aurora(T, 66, -140, 0.04)]);
+    expect(s.discs.data[3]!).toBeGreaterThan(0.002);
   });
 });
 

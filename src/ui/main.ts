@@ -251,7 +251,22 @@ canvas.addEventListener("pointerleave", () => {
   render();
 });
 
-const selectedId = (): string | null => cursorEvent(register)?.id ?? null;
+/**
+ * A function declaration, not a const arrow, and that is the whole point.
+ *
+ * `render` is hoisted and is reachable from the socket handler the moment `createLink` opens
+ * its connection, which is well above here. A `const` read from `render` is therefore in its
+ * temporal dead zone for that window, and every frame that arrives in it throws
+ * "Cannot access selectedId before initialization" straight out of the message handler. The
+ * page kept running, the chrome kept updating, and the sky drew nothing, with the only trace
+ * in a console nobody had open.
+ *
+ * Declaring it as a function hoists it with `render`, so the two cannot get out of order
+ * again. Moving the line further up the file would have fixed this instance and left the trap.
+ */
+function selectedId(): string | null {
+  return cursorEvent(register)?.id ?? null;
+}
 
 /* ---- render -------------------------------------------------------------------------------- */
 

@@ -71,7 +71,16 @@ const browserSocket: SocketFactory = (url, io) => {
   ws.addEventListener("close", () => io.onClose());
   // An error is always followed by a close, so handling both would report the drop twice.
   ws.addEventListener("error", () => {});
-  return { send: (text) => ws.send(text), close: () => ws.close() };
+  // Checked against OPEN, not merely against the socket existing. A socket is created in the
+  // CONNECTING state and stays there for a round trip, and `send` on a CONNECTING socket throws
+  // rather than queueing. The caller above already says a frame that cannot go now should be
+  // dropped rather than held, and `hello` is replayed on open, so this loses nothing.
+  return {
+    send: (text) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(text);
+    },
+    close: () => ws.close(),
+  };
 };
 
 export function createLink(

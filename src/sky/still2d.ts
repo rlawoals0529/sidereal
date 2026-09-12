@@ -17,7 +17,15 @@
  * and the streaks caught at every stage of drawing themselves in. That is a long exposure,
  * which is exactly what a photograph of a meteor shower is.
  */
-import { DEG, horizontal, localVec, stereographic } from "./astro.ts";
+import {
+  ANTIPODE_CUT,
+  DEG,
+  extinction,
+  horizontal,
+  localFromEquatorialUnit,
+  localVec,
+  stereographic,
+} from "./astro.ts";
 import {
   EARTH_RADIUS_KM,
   METEOR_DRAW_S,
@@ -27,9 +35,11 @@ import {
   QUAKE_LIFE_S,
   RAYLEIGH_KM_S,
   SPREAD_R0,
+  STAR_CORE,
 } from "./constants.ts";
 import type { RGB } from "./palette.ts";
-import { ARC_STRIDE, DISC_STRIDE, RING_STRIDE, STREAK_STRIDE, type Scene } from "./scene.ts";
+import { ARC_STRIDE, DISC_STRIDE, RING_STRIDE, STAR_STRIDE, STREAK_STRIDE, type Scene } from "./scene.ts";
+import { catalogue } from "./stars.ts";
 
 function css(c: RGB, a: number): string {
   const to255 = (v: number): number => Math.round(Math.max(0, Math.min(1, v)) * 255);
@@ -64,6 +74,51 @@ export function drawStill(ctx: CanvasRenderingContext2D, scene: Scene): void {
     const z = vec.x * f.forward.x + vec.y * f.forward.y + vec.z * f.forward.z;
     return { x: cx + pt.x * s, y: cy - pt.y * s, k: 2 / (1 + z), alt: hz.alt };
   };
+
+  // The stars, first, because everything else happens against them.
+  //
+  // Squares, not discs, and that is the whole reason this path can draw nine thousand of them
+  // in a still. A radial gradient per star is about forty microseconds, which is most of a
+  // second for the catalogue; a `fillRect` is a memory write. At the size a star is drawn, two
+  // pixels for almost all of them, the difference between a square and a disc is not visible,
+  // and where it would be - the bright handful above four pixels - the gradient is worth
+  // paying for and is used.
+  //
+  // Same curves as the GL path, off the same instance buffer, so the two are the same sky.
+  {
+    const sinLst = Math.sin(f.lst);
+    const cosLst = Math.cos(f.lst);
+    const stars = catalogue();
+    const d = scene.stars.data;
+    for (let i = 0; i < stars.length; i++) {
+      const vec = localFromEquatorialUnit(stars[i]!.unit, sinLst, cosLst, f.sinPhi, f.cosPhi);
+      if (vec.z <= 0) continue;
+      const z = vec.x * f.forward.x + vec.y * f.forward.y + vec.z * f.forward.z;
+      if (z <= ANTIPODE_CUT) continue;
+      const k = 2 / (1 + z);
+      const x = cx + k * (vec.x * f.right.x + vec.y * f.right.y + vec.z * f.right.z) * s;
+      const y = cy - k * (vec.x * f.up.x + vec.y * f.up.y + vec.z * f.up.z) * s;
+      if (x < -8 || y < -8 || x > w + 8 || y > h + 8) continue;
+      const o = i * STAR_STRIDE;
+      const size = d[o + 2]!;
+      const alpha = d[o + 3]! * extinction(Math.asin(vec.z));
+      if (alpha <= 0.004) continue;
+      const colour: RGB = [d[o + 4]!, d[o + 5]!, d[o + 6]!];
+      if (size > 4) {
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, size / 2);
+        for (const stop of [0, 0.25, 0.5, 0.75, 1]) {
+          grad.addColorStop(stop, css(colour, alpha * Math.exp(-STAR_CORE * stop * stop)));
+        }
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = css(colour, alpha);
+        ctx.fillRect(x - size / 2, y - size / 2, size, size);
+      }
+    }
+  }
 
   // Horizon.
   ctx.lineWidth = 1.1 * v.dpr;

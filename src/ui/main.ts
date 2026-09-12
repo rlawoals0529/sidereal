@@ -233,7 +233,38 @@ addEventListener("pagehide", () => {
 
 /* ---- pointer ------------------------------------------------------------------------------ */
 
+/**
+ * Looking around is the renderer's job. Pointing at things is this page's.
+ *
+ * The drag, the wheel, the pinch and the camera keys are bound inside `src/sky`, on the canvas
+ * it owns and on the document, because the view is the renderer's own state and a second copy
+ * of it here is how two copies of one thing start disagreeing. Those keys are WASD, plus and
+ * minus, and zero to go back to the opening view, with the arrow keys on top of that whenever
+ * no other control has focus; the arrows belong to the register's listbox and the palette's
+ * radio group the rest of the time, which is why the letters are the tier that always works.
+ *
+ * The two halves do have to agree about one thing, and this flag is it. While the pointer is
+ * down and moving the sky, the evidence panel must not keep re-targeting itself at whatever
+ * slides under the cursor. It is tracked from the raw events rather than asked of the renderer,
+ * because "a button is down on the canvas" is the whole of what this side needs to know and it
+ * is already on the event.
+ */
+let pointerDown = false;
+
+canvas.addEventListener("pointerdown", () => {
+  pointerDown = true;
+});
+
+// On the window rather than the canvas, so a drag that ends anywhere still ends.
+addEventListener("pointerup", () => {
+  pointerDown = false;
+});
+addEventListener("pointercancel", () => {
+  pointerDown = false;
+});
+
 canvas.addEventListener("pointermove", (e) => {
+  if (pointerDown) return;
   const box = canvas.getBoundingClientRect();
   const hit = handle.hitTest(e.clientX - box.left, e.clientY - box.top);
   // Compared by id rather than by object, so a renderer that hands back a fresh object for the

@@ -349,3 +349,112 @@ export function diurnalDirection(
   if (len < 1e-12) return null;
   return { dx: dx / len, dy: dy / len };
 }
+
+/**
+ * The same equatorial-to-local transform as `horizontal` then `localVec`, with no trigonometry
+ * in it, for the one caller that runs it nine thousand times.
+ *
+ * `horizontal` costs four `Math.sin`/`Math.cos`/`atan2` calls per point, which is right when
+ * you are converting a few hundred events. The star catalogue is 8,920 fixed points and the
+ * hit test walks all of them on every pointer move, so at that size the trig is the whole
+ * cost, and all of it is redundant: a star's declination and right ascension never change, so
+ * `cos(dec)cos(ra)`, `cos(dec)sin(ra)` and `sin(dec)` can be computed once, at load, and the
+ * only thing that varies per frame is the observer's own sidereal time and latitude.
+ *
+ * What is left is a rotation. Substituting `H = lst - ra` into Meeus 13.5 and 13.6 and
+ * collecting terms gives, with `u` the star's fixed equatorial unit vector:
+ *
+ *     e = (u.x cos(lst) + u.y sin(lst),  u.x sin(lst) - u.y cos(lst),  u.z)
+ *     local = (-e.y,  e.z cos(phi) - e.x sin(phi),  e.x cos(phi) + e.z sin(phi))
+ *
+ * That is eight multiplies and no transcendentals. It is exact, not an approximation: the
+ * `atan2`/`asin` pair in `horizontal` recovers an angle that `localVec` immediately turns back
+ * into the same vector, so going straight to the vector skips a round trip rather than
+ * cutting a corner.
+ *
+ * **The trap.** This is a second derivation of the same geometry, which is exactly the kind of
+ * thing that drifts. `test/sky/stars.test.ts` checks it against `localVec(horizontal(...))`
+ * over a grid of declinations, right ascensions, latitudes and sidereal times, so if either
+ * moves the other has to.
+ */
+export function equatorialUnit(decRad: number, raRad: number): LocalVec {
+  const cd = Math.cos(decRad);
+  return { x: cd * Math.cos(raRad), y: cd * Math.sin(raRad), z: Math.sin(decRad) };
+}
+
+export function localFromEquatorialUnit(
+  u: LocalVec,
+  sinLst: number,
+  cosLst: number,
+  sinPhi: number,
+  cosPhi: number,
+): LocalVec {
+  const ex = u.x * cosLst + u.y * sinLst;
+  const ey = u.x * sinLst - u.y * cosLst;
+  return {
+    x: -ey,
+    y: u.z * cosPhi - ex * sinPhi,
+    z: ex * cosPhi + u.z * sinPhi,
+  };
+}
+
+/**
+ * Turn the gaze by an angle measured in the plane of the screen, and give back where it now
+ * points.
+ *
+ * The obvious implementation adds degrees to `gazeAzDeg` and `gazeAltDeg` directly, and it is
+ * wrong in a way that only shows up where this project starts: looking straight up. Azimuth
+ * has no meaning at the zenith, so a horizontal drag there is either a no-op or a spin,
+ * depending on which way the arithmetic falls, and the default view is exactly that point.
+ *
+ * So the rotation happens on the direction vector, in the observer's own screen basis, and the
+ * angles are read back out afterwards. `right` is horizontal by construction in `viewFrame`,
+ * which is what keeps the horizon level however far the gaze has been dragged: there is no
+ * roll to accumulate, because roll is never represented.
+ *
+ * **It is a real rotation, not a nudge and a renormalise.** `f + right*a + up*b` normalised is
+ * the same thing to first order and turns by `atan(angle)` rather than by `angle`, which nobody
+ * notices on a pointer move of three thousandths of a radian and which is eight degrees short
+ * at a quarter turn. The screen basis is orthonormal, so the exact form costs one sine and one
+ * cosine and the approximation bought nothing.
+ *
+ * The path it traces is a great circle, and that is what direct manipulation means: a straight
+ * drag across the middle of the frame is a straight line on the sphere, so the piece of sky
+ * under the pointer stays under it. The visible consequence is that a long sideways drag from a
+ * tilted view sinks slightly toward the horizon, which is the great circle being a great circle
+ * rather than a bug. A yaw-and-pitch camera holds the altitude instead and loses the pointer.
+ */
+export function rotateGaze(
+  azDeg: number,
+  altDeg: number,
+  dRightRad: number,
+  dUpRad: number,
+): { azDeg: number; altDeg: number } {
+  const az = azDeg * DEG;
+  const f = localVec({ alt: altDeg * DEG, az });
+  const right: LocalVec = { x: Math.cos(az), y: -Math.sin(az), z: 0 };
+  const up: LocalVec = {
+    x: right.y * f.z - right.z * f.y,
+    y: right.z * f.x - right.x * f.z,
+    z: right.x * f.y - right.y * f.x,
+  };
+  const theta = Math.hypot(dRightRad, dUpRad);
+  if (theta < 1e-12) return { azDeg, altDeg };
+  const c = Math.cos(theta);
+  // The unit tangent the gaze rotates toward, times the sine of the angle.
+  const k = Math.sin(theta) / theta;
+  const x = f.x * c + (right.x * dRightRad + up.x * dUpRad) * k;
+  const y = f.y * c + (right.y * dRightRad + up.y * dUpRad) * k;
+  const z = f.z * c + (right.z * dRightRad + up.z * dUpRad) * k;
+  const len = Math.hypot(x, y, z);
+  if (len < 1e-9) return { azDeg, altDeg };
+  const nz = Math.max(-1, Math.min(1, z / len));
+  const alt = Math.asin(nz);
+  // Within a thousandth of a radian of the pole the azimuth of the new direction is numerical
+  // noise, so the old one is kept. The view is still correct: at the zenith every azimuth
+  // points at the same piece of sky, and holding the previous one means a drag that goes up
+  // over the pole and back down comes back the way it went rather than snapping to a new roll.
+  const horiz = Math.hypot(x, y);
+  const newAz = horiz < 1e-3 * len ? azDeg : normalizeAngle(Math.atan2(x / len, y / len)) * RAD;
+  return { azDeg: newAz, altDeg: alt * RAD };
+}

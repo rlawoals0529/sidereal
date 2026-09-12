@@ -23,11 +23,14 @@
 import type { EventKind, SkyEvent } from "../shared/event.ts";
 import type { Presence } from "../shared/protocol.ts";
 import {
+  ANTIPODE_CUT,
   DEG,
   RAD,
+  airmass,
   celestialPoint,
   diurnalDirection,
   horizontal,
+  localFromEquatorialUnit,
   localVec,
   planeRadius,
   stereographic,
@@ -38,6 +41,8 @@ import {
 import {
   AURORA_FADE_S,
   EARTH_RADIUS_KM,
+  FOV_MAX_DEG,
+  FOV_MIN_DEG,
   METEOR_DRAW_S,
   METEOR_LIFE_S,
   METEOR_MAX_DEG,
@@ -46,9 +51,19 @@ import {
   RAYLEIGH_KM_S,
   STILL_EXPOSURE,
 } from "./constants.ts";
-import { FifoLayer, PathLayer, SlotLayer, type LayerStats } from "./layers.ts";
+import { CatalogueLayer, FifoLayer, PathLayer, SlotLayer, type LayerStats } from "./layers.ts";
 import { parseColour, type PaletteSource, type RGB, type SkyPalette } from "./palette.ts";
 import { Ledger, audit, type Audit, type Auditable, type DrawReport } from "./provenance.ts";
+import {
+  STAR_SIZE_MAX_PX,
+  brightnessOf,
+  catalogue,
+  describeStar,
+  kelvinOf,
+  sizeOf,
+  starColour,
+  type Star,
+} from "./stars.ts";
 
 export type { Observer } from "./astro.ts";
 
@@ -57,6 +72,7 @@ export const STREAK_STRIDE = 4;
 export const RING_STRIDE = 4;
 export const DISC_STRIDE = 14;
 export const ARC_STRIDE = 6;
+export const STAR_STRIDE = 8;
 
 /** Offsets of the one field in each layout that a clock rebase has to shift. */
 const STREAK_TIME = 2;
@@ -67,6 +83,19 @@ const DISC_TIME = 4;
 const REBASE_AFTER_MS = 3_600_000;
 
 const HORIZON_POINTS = 288;
+
+/**
+ * How far outside a star's drawn edge still counts as pointing at it, CSS pixels.
+ *
+ * Smaller than the thirteen pixels an event gets, and it has to be. An event is one of a few
+ * dozen lights and a generous radius is what makes a two-pixel meteor clickable; a star is one
+ * of nine thousand, so the same radius would mean the panel named whichever anonymous
+ * sixth-magnitude speck happened to be nearest rather than the star being pointed at. Three
+ * pixels outside the drawn edge is close to "on it", which is the only honest threshold when
+ * the whole hemisphere is on a nine hundred pixel canvas and a single pixel is a sixth of a
+ * degree of sky.
+ */
+const STAR_HIT_SLOP_CSS = 3;
 
 export type SceneOptions = {
   observer: Observer;
@@ -88,10 +117,28 @@ export type SceneOptions = {
 export const DEFAULT_CAPACITY = { meteors: 4096, quakes: 512, discs: 8192, track: 180 };
 
 export type Hit = {
-  kind: EventKind | "visitor";
+  kind: EventKind | "visitor" | "star";
   /** The record, verbatim. The panel prints `label` and `source` from here and nothing else. */
   event: SkyEvent | null;
   visitor: Presence | null;
+  /**
+   * The catalogue row, when the thing under the cursor is a star.
+   *
+   * Here rather than in a hit test of its own because a reader pointing at the sky is asking
+   * one question, and answering it through two mechanisms is how the two start disagreeing
+   * about which of an overlapping pair is on top. A caller that only handles events reads
+   * `event` and gets null for a star, which is the same miss it already gets for a visitor.
+   */
+  star: Star | null;
+  /**
+   * What it is, in one line, whichever of the three it turned out to be.
+   *
+   * An event already carries its own `label` and this hands that straight back, unchanged: the
+   * field exists because a star does not have one and the alternative was a caller switching on
+   * `kind` to find out where to read the name from. Never generated or embellished, exactly as
+   * `SkyEvent.label` is not.
+   */
+  label: string;
   altDeg: number;
   azDeg: number;
   /** CSS pixels, where the light actually landed. */
@@ -136,6 +183,8 @@ export class Scene {
   readonly discs: SlotLayer;
   readonly track: PathLayer;
   readonly horizon: PathLayer;
+  /** The fixed stars. Written once; only the rotation uniform changes after that. */
+  readonly stars: CatalogueLayer;
 
   private opts: SceneOptions;
   private visitors = new Map<string, VisitorState>();
@@ -163,13 +212,17 @@ export class Scene {
     // The horizon is not a light layer and is never handed to the audit as one. It is
     // declared chrome, and the audit checks it by name on the draw side instead.
     this.horizon = new PathLayer("horizon", HORIZON_POINTS + 1, this.ledger);
+    // Exactly as long as the catalogue, which is the property the audit leans on: there is no
+    // spare slot for a light with no record behind it to sit in.
+    this.stars = new CatalogueLayer("stars", catalogue().length, STAR_STRIDE, this.ledger);
     this.frame = viewFrame(opts.observer, this.epochMs);
     this.buildHorizon();
+    this.buildStars();
   }
 
   /** The layers the provenance audit walks. Chrome is deliberately not among them. */
   auditableLayers(): Auditable[] {
-    return [this.meteors, this.quakes, this.discs, this.track];
+    return [this.meteors, this.quakes, this.discs, this.track, this.stars];
   }
 
   get palette(): SkyPalette {
@@ -182,6 +235,11 @@ export class Scene {
 
   get reducedMotion(): boolean {
     return this.opts.reducedMotion;
+  }
+
+  /** Full angle across the frame, degrees. What the camera reads to seed itself. */
+  get fov(): number {
+    return this.opts.fovDeg;
   }
 
   get exposure(): number {
@@ -426,7 +484,10 @@ export class Scene {
   }
 
   setFov(deg: number): void {
-    this.opts = { ...this.opts, fovDeg: Math.max(20, Math.min(300, deg)) };
+    // The same limits the camera clamps to, from the same constants, so a field of view that
+    // arrives through `Sky.setFov` and one that arrives through a pinch cannot end up with two
+    // different ideas of how wide the sky is allowed to be.
+    this.opts = { ...this.opts, fovDeg: Math.max(FOV_MIN_DEG, Math.min(FOV_MAX_DEG, deg)) };
     this.resize(this.widthCss, this.heightCss, this.dpr);
   }
 
@@ -459,12 +520,22 @@ export class Scene {
       d[o + 12] = colour[2];
       this.discs.touchSlot(slot);
     }
+    // The stars carry a colour too, and the colourless end of it is the palette's. Cheaper
+    // than it looks: `starColour` returns the token unchanged for anything fainter than third
+    // magnitude, so only a few hundred of the nine thousand do any arithmetic.
+    this.repaintStars();
   }
 
   resize(widthCss: number, heightCss: number, dpr: number): void {
     this.widthCss = Math.max(1, widthCss);
     this.heightCss = Math.max(1, heightCss);
+    const previousDpr = this.dpr;
     this.dpr = Math.max(0.5, dpr);
+    // A star is sized in device pixels rather than degrees of sky, so its instance data is the
+    // one thing in the scene that depends on the device pixel ratio. Moving a window between a
+    // laptop screen and an external monitor is the case, and it is rare enough that rewriting
+    // nine thousand instances is the right trade against carrying a dpr uniform for it.
+    if (this.dpr !== previousDpr) this.repaintStars();
     const edgePx = (Math.min(this.widthCss, this.heightCss) * this.dpr) / 2;
     // Two percent of margin so the horizon ring is inside the frame rather than tangent to
     // it, which reads as a crop rather than as a boundary.
@@ -573,6 +644,50 @@ export class Scene {
     this.horizon.set(pts);
   }
 
+  // ---------------------------------------------------------------- the catalogue
+
+  /**
+   * The fixed stars, written once.
+   *
+   * Every per-star number that can be worked out in advance is worked out here and never
+   * again: brightness from magnitude, diameter from brightness, colour from the colour index
+   * and the palette's neutral. The shader is then left with the only things that actually
+   * change, which are where the star is in this observer's sky and how much air it is being
+   * seen through, and both of those come off the same rotation uniform every other layer
+   * already reads. That is why nine thousand more lights cost one more draw call and no more
+   * per-frame work.
+   *
+   * The curves themselves live in `stars.ts` and exist once. Recomputing them in GLSL would
+   * have meant a second copy of the magnitude scale for the parity test to guard, for
+   * arithmetic whose inputs are constant.
+   */
+  private buildStars(): void {
+    const stars = catalogue();
+    this.stars.fill(
+      stars.map((star) => ({ of: "star" as const, star })),
+      (into, at, i) => this.writeStar(into, at, stars[i]!),
+    );
+  }
+
+  private writeStar(into: Float32Array, at: number, star: Star): void {
+    const colour = starColour(star.mag, star.ci, this.opts.palette.star);
+    into[at] = star.decRad;
+    into[at + 1] = star.raRad;
+    into[at + 2] = sizeOf(star.mag) * this.dpr;
+    into[at + 3] = brightnessOf(star.mag);
+    into[at + 4] = colour[0];
+    into[at + 5] = colour[1];
+    into[at + 6] = colour[2];
+    // Off the catalogue index, so a star shimmers the same way across a reload and no two
+    // neighbours shimmer together.
+    into[at + 7] = seedOf(`star:${star.index}`);
+  }
+
+  private repaintStars(): void {
+    const stars = catalogue();
+    this.stars.recolour((into, at, i) => this.writeStar(into, at, stars[i]!));
+  }
+
   // ---------------------------------------------------------------- audit
 
   runAudit(draws: readonly DrawReport[]): Audit {
@@ -581,7 +696,13 @@ export class Scene {
 
   stats(): { layers: LayerStats[]; ledger: number; visitors: number; epochMs: number } {
     return {
-      layers: [this.meteors.stats(), this.quakes.stats(), this.discs.stats(), this.track.stats()],
+      layers: [
+        this.meteors.stats(),
+        this.quakes.stats(),
+        this.discs.stats(),
+        this.track.stats(),
+        this.stars.stats(),
+      ],
       ledger: this.ledger.size,
       visitors: this.visitors.size,
       epochMs: this.epochMs,
@@ -645,7 +766,7 @@ export class Scene {
       if (dist >= bestDist) continue;
       const backing = this.backingOf(this.meteors.slotBacking(slot));
       if (!backing || backing.of !== "event") continue;
-      best = this.hitOf(backing.event, null, p.alt, p.az, dist, hx, hy, cx, cy,
+      best = this.hitOf({ event: backing.event }, { altRad: p.alt, azRad: p.az, distancePx: dist, x: hx, y: hy },
         `length and brightness are the magnitude the feed reported, ${Math.round(mag * 100)} percent, which for an edit is bytes changed. The direction is the sky's own rotation carrying that point, not a path the edit took.`);
       bestDist = dist;
     }
@@ -665,7 +786,7 @@ export class Scene {
       if (dist >= bestDist) continue;
       const backing = this.backingOf(this.quakes.slotBacking(slot));
       if (!backing || backing.of !== "event") continue;
-      best = this.hitOf(backing.event, null, p.alt, p.az, dist, p.x, p.y, cx, cy,
+      best = this.hitOf({ event: backing.event }, { altRad: p.alt, azRad: p.az, distancePx: dist, x: p.x, y: p.y },
         `the ring is the Rayleigh surface wave at 3.5 km per second, ${Math.round(RAYLEIGH_KM_S * age)} km out after ${Math.round(age)} seconds.`);
       bestDist = dist;
     }
@@ -681,23 +802,120 @@ export class Scene {
       if (dist >= bestDist) continue;
       const backing = this.backingOf(this.discs.slotBacking(slot));
       if (!backing) continue;
+      const where = { altRad: p.alt, azRad: p.az, distancePx: dist, x: hx, y: hy };
       if (backing.of === "visitor") {
         const who = backing.presence;
-        best = this.hitOf(null, who, p.alt, p.az, dist, hx, hy, cx, cy,
+        best = this.hitOf({ visitor: who }, where,
           who.focused
             ? "in a focus session, so it holds perfectly still. Placed where they are looking, which is the only position anyone sends."
             : "idle, so it drifts and scintillates. Placed where they are looking, which is the only position anyone sends.");
-      } else {
+      } else if (backing.of === "event") {
         const e = backing.event;
-        best = this.hitOf(e, null, p.alt, p.az, dist, hx, hy, cx, cy,
+        best = this.hitOf({ event: e }, where,
           e.kind === "aurora"
             ? `brightness is the OVATION probability at this cell, ${Math.round(e.magnitude * 100)} percent.`
             : "the ISS, at the position its own track reported. The trail behind it is the last three minutes of fixes.");
+      } else {
+        // Nothing in the disc layer is a star. Skipping rather than asserting, because the
+        // audit is what enforces what is allowed to be in which layer.
+        continue;
       }
       bestDist = dist;
     }
 
+    // Stars, and only if nothing else was hit.
+    //
+    // **Not in the same nearest-wins race as everything else, on purpose.** There are 8,920
+    // stars and roughly four thousand of them are above the horizon at any moment, so at a
+    // thirteen pixel grab radius there are usually several inside the cursor and one of them
+    // is almost always nearer than the meteor you were actually pointing at. Letting stars
+    // compete on distance would mean the evidence panel could no longer be pointed at an
+    // event, which is the thing this page is for. So the events and the people win, and the
+    // catalogue answers the rest of the sky.
+    //
+    // Within the catalogue the contest is by EDGE rather than by centre: a star's score is its
+    // distance minus its own drawn radius, so the brightest star near the cursor wins over a
+    // fainter one a pixel closer. You hit what you can see, which is the behaviour anybody
+    // pointing at Vega expects.
+    if (best === null) best = this.hitStar(px, py, s);
+
     return best;
+  }
+
+  /**
+   * The catalogue under the cursor, in one pass with no trigonometry in it.
+   *
+   * Nine thousand stars on every pointer move is the one place in this file where the obvious
+   * loop is too slow: `horizontal` costs four transcendentals a point, which at this size is
+   * most of a millisecond and turns a hover into a stutter. A star's position never changes,
+   * so its equatorial unit vector is cached in the catalogue and the per-frame part is a
+   * rotation. See `localFromEquatorialUnit`.
+   *
+   * The projection below is the same one `projectDrawn` applies, written against a direction
+   * vector instead of a declination and a right ascension because that is what the fast path
+   * produces. `test/sky/stars.test.ts` pins the two against each other.
+   */
+  private hitStar(px: number, py: number, scaleCss: number): Hit | null {
+    const f = this.frame;
+    const sinLst = Math.sin(f.lst);
+    const cosLst = Math.cos(f.lst);
+    const stars = catalogue();
+    const data = this.stars.data;
+
+    // A cheap rejection bound before any square root: the furthest a cursor can be from a
+    // star's centre and still touch it is the biggest drawn radius plus the slop.
+    const reach = STAR_SIZE_MAX_PX / 2 + STAR_HIT_SLOP_CSS;
+    const reach2 = reach * reach;
+
+    let bestScore = STAR_HIT_SLOP_CSS;
+    let bestStar: Star | null = null;
+    let bestVec = { x: 0, y: 0, z: 0 };
+    let bestX = 0;
+    let bestY = 0;
+    let bestDist = 0;
+
+    for (let i = 0; i < stars.length; i++) {
+      const star = stars[i]!;
+      const v = localFromEquatorialUnit(star.unit, sinLst, cosLst, f.sinPhi, f.cosPhi);
+      // Below the horizon. Half the catalogue, rejected on a sign test.
+      if (v.z <= 0) continue;
+      const z = v.x * f.forward.x + v.y * f.forward.y + v.z * f.forward.z;
+      if (z <= ANTIPODE_CUT) continue;
+      const k = (2 / (1 + z)) * scaleCss;
+      const dx = px - k * (v.x * f.right.x + v.y * f.right.y + v.z * f.right.z);
+      const dy = py - k * (v.x * f.up.x + v.y * f.up.y + v.z * f.up.z);
+      const d2 = dx * dx + dy * dy;
+      if (d2 > reach2) continue;
+
+      const dist = Math.sqrt(d2);
+      // The drawn diameter is in device pixels, and everything here is in CSS pixels.
+      const score = dist - data[i * STAR_STRIDE + 2]! / (2 * this.dpr);
+      if (score >= bestScore) continue;
+      bestScore = score;
+      bestStar = star;
+      bestVec = v;
+      bestX = px - dx;
+      bestY = py - dy;
+      bestDist = dist;
+    }
+
+    if (bestStar === null) return null;
+    const alt = Math.asin(Math.max(-1, Math.min(1, bestVec.z)));
+    return this.hitOf(
+      { star: bestStar },
+      {
+        altRad: alt,
+        azRad: Math.atan2(bestVec.x, bestVec.y),
+        distancePx: bestDist,
+        x: bestX,
+        y: bestY,
+      },
+      `brightness is apparent magnitude ${bestStar.mag.toFixed(2)}, on the real scale, where one ` +
+        `magnitude is 2.512 times the light and the naked eye stops at 6.5. The colour is a ` +
+        `blackbody at ${Math.round(kelvinOf(bestStar.ci) / 10) * 10} K, which is what this star's ` +
+        `colour index of ${bestStar.ci.toFixed(2)} means. Dimmed here by the ` +
+        `${airmass(alt).toFixed(2)} airmasses of atmosphere it is being seen through.`,
+    );
   }
 
   /**
@@ -761,10 +979,15 @@ export class Scene {
     /** Canvas pixels, matching `hitOf`, so a ring lands where a pointer would have hit. */
     const at = (x: number, y: number) => ({ x: cx + x, y: cy - y });
 
+    // Stars are deliberately not reachable here. `locate` exists so the keyboard can ring the
+    // light it has selected in the register, and the register holds events; a star has no id in
+    // that namespace and nothing ever asks for one.
     const matches = (key: string | null): boolean => {
       const b = this.backingOf(key);
       if (!b) return false;
-      return b.of === "event" ? b.event.id === id : b.presence.id === id;
+      if (b.of === "event") return b.event.id === id;
+      if (b.of === "visitor") return b.presence.id === id;
+      return false;
     };
 
     // Meteors report the head of the streak, not the point it grew from, because the head is
@@ -811,31 +1034,51 @@ export class Scene {
     return key === null ? undefined : this.ledger.get(key);
   }
 
+  /**
+   * One subject, not three nullable ones.
+   *
+   * There are three kinds of thing that can be under a cursor and each carries a different
+   * record, so the alternative was a positional argument per kind with nulls in the other two
+   * slots. That shape is how a call ends up passing the right record in the wrong position.
+   */
   private hitOf(
-    event: SkyEvent | null,
-    visitor: Presence | null,
-    altRad: number,
-    azRad: number,
-    distancePx: number,
-    x: number,
-    y: number,
-    cx: number,
-    cy: number,
+    subject: { event: SkyEvent } | { visitor: Presence } | { star: Star },
+    at: { altRad: number; azRad: number; distancePx: number; x: number; y: number },
     encoding: string,
   ): Hit {
+    const event = "event" in subject ? subject.event : null;
+    const visitor = "visitor" in subject ? subject.visitor : null;
+    const star = "star" in subject ? subject.star : null;
     return {
-      kind: visitor ? "visitor" : (event?.kind ?? "edit"),
+      kind: star ? "star" : visitor ? "visitor" : (event?.kind ?? "edit"),
       event,
       visitor,
-      altDeg: altRad * RAD,
-      azDeg: azRad * RAD,
-      x: cx + x,
-      y: cy - y,
-      distancePx,
+      star,
+      label: star ? describeStar(star) : (event?.label ?? visitorLabel(visitor)),
+      altDeg: at.altRad * RAD,
+      azDeg: at.azRad * RAD,
+      x: this.widthCss / 2 + at.x,
+      y: this.heightCss / 2 - at.y,
+      distancePx: at.distancePx,
       encoding,
+      // A catalogue position and a feed's measured coordinate are both measurements. Only an
+      // event can be regional, and only because a feed said so.
       inferredPlacement: event?.placement === "regional",
     };
   }
+}
+
+/**
+ * A person, in words, and deliberately without their id in it.
+ *
+ * The only things a visitor sends are a palette, where they are looking and whether they are in
+ * a session. None of those is a name, so there is nothing to print but the fact of them, and a
+ * server-assigned id rendered as a label would read as one. A caller that needs the id has the
+ * whole `Presence` on the hit.
+ */
+function visitorLabel(visitor: Presence | null): string {
+  if (!visitor) return "";
+  return visitor.focused ? "A visitor, in a focus session" : "A visitor";
 }
 
 function distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {

@@ -30,6 +30,19 @@
  * | visitor | their accent    | a visitor is drawn in the palette they are sitting in, which is real metadata they sent. Falls back to `--accent-2`. |
  * | you     | `--fg`          | the brightest thing in the sky is yours. |
  * | chrome  | `--edge`        | the token for a boundary that does not have to be seen. |
+ * | star    | `--fg`          | see below. |
+ *
+ * **`star` is the one token that is only half of the answer.** A star's hue is a measurement,
+ * taken from its colour index, and no palette gets to overrule it. But most stars have no
+ * visible hue at all: colour vision is a cone response and cones need more light than a fifth
+ * magnitude star delivers, so a real sky is a field of white points with a handful of coloured
+ * ones in it. This token is that white, and the catalogue decides which stars escape it.
+ *
+ * `--fg` and not `--dim`, because a star at the naked-eye limit is already drawn at a
+ * twentieth of full brightness and dimming its colour on top of that would put it under the
+ * ground. Faintness is expressed in alpha, which is the rule this file opens with. Sharing a
+ * token with `you` costs nothing: yours is drawn at 0.95 alpha and three degrees across, and a
+ * star at the same token is a two-pixel point.
  */
 
 export type RGB = readonly [number, number, number];
@@ -54,6 +67,8 @@ export type SkyPalette = {
   visitor: RGB;
   you: RGB;
   chrome: RGB;
+  /** The colourless end of a star, which is most of them. See the table above. */
+  star: RGB;
 };
 
 const FALLBACK: RGB = [0.5, 0.5, 0.5];
@@ -151,6 +166,7 @@ export function readPalette(src: PaletteSource): SkyPalette {
     visitor: tok("--accent-2", tok("--accent")),
     you: tok("--fg"),
     chrome: tok("--edge"),
+    star: tok("--fg"),
   };
 }
 

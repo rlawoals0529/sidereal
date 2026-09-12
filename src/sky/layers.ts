@@ -341,3 +341,58 @@ export class PathLayer extends BaseLayer {
     return { name: this.name, live: this.verts, capacity: this.capacity, dropped: this.dropped };
   }
 }
+
+/**
+ * A fixed set of records, written once at construction and never again: the star catalogue.
+ *
+ * The fourth shape, because the star catalogue is the fourth access pattern and it is the
+ * degenerate one. There are no arrivals, no retirement, no keys to look up, and no slot ever
+ * changes owner. The buffer is exactly as long as the catalogue, which is the property that
+ * matters for the audit: there is no spare slot for a light with no record behind it to sit in,
+ * so the only way to add one is to make the layer bigger, which is a visible act.
+ *
+ * It goes through `ledger.admit` per row exactly as the others do rather than getting a blanket
+ * exemption, because an exemption is the thing that would make the audit stop meaning anything.
+ * See the `Backing` comment in `provenance.ts` for the full argument.
+ *
+ * `recolour` is the one mutation, and it rewrites a span of each instance rather than the
+ * record: a palette change moves the neutral end of every star's colour, and the alternative
+ * would be decoding and re-admitting nine thousand rows to change three floats.
+ */
+export class CatalogueLayer extends BaseLayer {
+  private count = 0;
+
+  /** `write` fills `stride` floats for one record. Called once per record, at construction. */
+  fill(records: readonly Backing[], write: (into: Float32Array, at: number, index: number) => void): void {
+    const n = Math.min(records.length, this.capacity);
+    for (let i = 0; i < n; i++) {
+      this.keys[i] = this.ledger.admit(records[i]!);
+      write(this.data, i * this.stride, i);
+    }
+    this.dropped += records.length - n;
+    this.count = n;
+    this.dirtyLo = 0;
+    this.dirtyHi = n;
+  }
+
+  /** Rewrite part of every instance in place, for a palette or device-pixel-ratio change. */
+  recolour(write: (into: Float32Array, at: number, index: number) => void): void {
+    for (let i = 0; i < this.count; i++) write(this.data, i * this.stride, i);
+    if (this.count > 0) {
+      this.dirtyLo = 0;
+      this.dirtyHi = this.count;
+    }
+  }
+
+  *liveSlots(): Iterable<number> {
+    for (let i = 0; i < this.count; i++) yield i;
+  }
+
+  draws(): DrawRange[] {
+    return this.count === 0 ? [] : [{ first: 0, count: this.count }];
+  }
+
+  stats(): LayerStats {
+    return { name: this.name, live: this.count, capacity: this.capacity, dropped: this.dropped };
+  }
+}

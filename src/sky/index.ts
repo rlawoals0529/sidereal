@@ -33,12 +33,16 @@ import {
   type PaletteSource,
   type SkyPalette,
 } from "./palette.ts";
+import { Camera, radiansPerCssPixel, type CameraState } from "./camera.ts";
+import { attachControls, type Controls } from "./controls.ts";
 import { assertEveryLightIsEarned, type Audit } from "./provenance.ts";
 import { Renderer } from "./renderer.ts";
 import { drawStill } from "./still2d.ts";
 import type { Gl } from "./gl/device.ts";
 
 export type { Hit, Observer };
+export type { CameraState } from "./camera.ts";
+export type { Star } from "./stars.ts";
 export type { Audit } from "./provenance.ts";
 export type { SkyPalette } from "./palette.ts";
 export { CHROME, describeViolations } from "./provenance.ts";
@@ -62,6 +66,14 @@ export type SkyOptions = {
   /** Force the fallback path, to see what a machine without WebGL2 gets. */
   force2d?: boolean;
   autoStart?: boolean;
+  /**
+   * Bind the pointer, wheel and keyboard controls to the canvas and the document.
+   *
+   * On by default, because a sky you cannot look around in is the thing this option exists to
+   * stop being the default. Off for a benchmark or a test that drives the view itself and
+   * would rather not have a stray key press move it.
+   */
+  controls?: boolean;
 };
 
 export type FrameStats = {
@@ -114,6 +126,10 @@ export type Sky = {
   setObserver(o: Partial<Observer>): void;
   look(azDeg: number, altDeg: number): void;
   setFov(deg: number): void;
+  /** Where the view is pointing and how wide it is, after any drag, glide or key. */
+  camera(): CameraState;
+  /** Back to the view the page opened on. What the reset key does, for a caller that wants it. */
+  resetView(): void;
   setReducedMotion(v: boolean | "auto"): void;
   resize(): void;
   /** What is under the cursor, in CSS pixels relative to the canvas. */
@@ -189,6 +205,26 @@ export function createSky(canvas: HTMLCanvasElement, options: SkyOptions = {}): 
   // every way including the accessibility one. It draws one honest still and stops.
   if (!renderer) scene.setReducedMotion(true);
 
+  /**
+   * The view, and the only thing on this page that holds it.
+   *
+   * Seeded from the same observer the scene was built with rather than from a second set of
+   * defaults, so there is one answer to "where does the sky open" and it lives in
+   * `sceneOptions`. Everything that moves the view goes through here and then down into the
+   * scene, including `look` and `setFov`, which is what stops a page call and a drag from
+   * each keeping their own idea of where the gaze is.
+   */
+  const camera = new Camera(
+    { azDeg: scene.observer.gazeAzDeg, altDeg: scene.observer.gazeAltDeg, fovDeg: scene.fov },
+    scene.reducedMotion,
+  );
+
+  const applyCamera = (): void => {
+    const c = camera.state;
+    scene.look(c.azDeg, c.altDeg);
+    scene.setFov(c.fovDeg);
+  };
+
   let selfId: string | null = null;
   let running = false;
   let rafId = 0;
@@ -242,6 +278,11 @@ export function createSky(canvas: HTMLCanvasElement, options: SkyOptions = {}): 
     if (!running) return;
     const gap = lastTs === 0 ? 0 : ts - lastTs;
     lastTs = ts;
+    // The camera is advanced here rather than inside `frame`, because `frame` is also what the
+    // benchmark and the still path call and neither of those has a real elapsed time to hand.
+    // A gap longer than a frame or two is a tab coming back from the background, and
+    // integrating a fling across it would throw the view somewhere nobody asked for.
+    if (gap > 0 && gap < NOT_A_FRAME_MS && camera.step(gap / 1000)) applyCamera();
     // A tab that was in the background reports one enormous gap on its way back. That is not
     // a slow frame and counting it would collapse a perfectly healthy sky to a still.
     if (gap > 0 && gap < NOT_A_FRAME_MS) {
@@ -275,6 +316,7 @@ export function createSky(canvas: HTMLCanvasElement, options: SkyOptions = {}): 
     motionQuery.addEventListener("change", onMotion);
   }
 
+  let controls: Controls | null = null;
   let observerRO: ResizeObserver | null = null;
   if (typeof ResizeObserver === "function") {
     observerRO = new ResizeObserver(() => {
@@ -340,14 +382,29 @@ export function createSky(canvas: HTMLCanvasElement, options: SkyOptions = {}): 
 
     setObserver(o) {
       scene.setObserver({ ...scene.observer, ...o });
+      // Standing somewhere else does not change where you are looking, but the caller is
+      // allowed to change both at once, so the camera takes whichever of the two arrived.
+      camera.adopt({
+        ...(o.gazeAzDeg === undefined ? {} : { azDeg: o.gazeAzDeg }),
+        ...(o.gazeAltDeg === undefined ? {} : { altDeg: o.gazeAltDeg }),
+      });
+      applyCamera();
       invalidate();
     },
     look(az, alt) {
-      scene.look(az, alt);
+      camera.adopt({ azDeg: az, altDeg: alt });
+      applyCamera();
       invalidate();
     },
     setFov(deg) {
-      scene.setFov(deg);
+      camera.adopt({ fovDeg: deg });
+      applyCamera();
+      invalidate();
+    },
+    camera: () => camera.state,
+    resetView() {
+      camera.reset();
+      applyCamera();
       invalidate();
     },
 
@@ -355,6 +412,8 @@ export function createSky(canvas: HTMLCanvasElement, options: SkyOptions = {}): 
       const on = resolveReducedMotion(v);
       if (on === scene.reducedMotion) return;
       scene.setReducedMotion(on);
+      // Dragging survives a motion preference; the glide does not. See `Camera.endDrag`.
+      camera.setReducedMotion(on);
       if (on) {
         sky.stop();
         invalidate();
@@ -407,12 +466,31 @@ export function createSky(canvas: HTMLCanvasElement, options: SkyOptions = {}): 
 
     destroy() {
       sky.stop();
+      controls?.destroy();
       stopPalette();
       observerRO?.disconnect();
       if (motionQuery && onMotion) motionQuery.removeEventListener("change", onMotion);
       renderer?.destroy();
     },
   };
+
+  if (options.controls !== false) {
+    controls = attachControls(
+      canvas,
+      camera,
+      {
+        viewport: () => ({ scale: scene.viewport.scale, dpr: scene.viewport.dpr }),
+        changed: () => {
+          applyCamera();
+          // Under a running loop the next frame picks this up on its own; with motion reduced
+          // there is no next frame, so the change has to ask for one. `invalidate` is a no-op
+          // while the loop is running, which is what makes this safe to call on every move.
+          invalidate();
+        },
+      },
+      () => scene.reducedMotion,
+    );
+  }
 
   sizeCanvas();
   if (options.autoStart !== false) sky.start();

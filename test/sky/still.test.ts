@@ -101,7 +101,10 @@ describe("the still composition", () => {
 
     const { ctx, calls } = recordingCtx();
     drawStill(ctx, scene);
-    expect(calls.filter((c) => c.op === "fillRect")).toHaveLength(1);
+    // One fillRect for the ground and one per faint star above the horizon. A floor rather
+    // than a count: which half of the catalogue is up depends on the instant, and the brightest
+    // stars draw as gradients instead.
+    expect(calls.filter((c) => c.op === "fillRect").length).toBeGreaterThan(1000);
     // Discs fill, streaks and rings and the two paths stroke.
     expect(calls.filter((c) => c.op === "fill").length).toBeGreaterThan(100);
     expect(calls.filter((c) => c.op === "stroke").length).toBeGreaterThan(100);

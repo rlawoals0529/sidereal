@@ -105,3 +105,44 @@ export const AURORA_FADE_S = 40;
  * arbitrary. Every streak in it is still one edit, and the panel still names it.
  */
 export const STILL_EXPOSURE = 4;
+
+/**
+ * How much a star's brightness wanders, and how fast, at one airmass above the zenith value.
+ *
+ * Scintillation is real and it is the reason stars twinkle and planets do not: a star is a
+ * point source, so the whole of it is displaced by the same pocket of moving air at once,
+ * where a planet's disc averages many pockets and holds steady. The amplitude genuinely grows
+ * with airmass, which is why something low in the sky flickers and the same star overhead
+ * barely does, and that dependence is taken from `skyAirmass` rather than invented.
+ *
+ * The RATE is not real and should not be read as a measurement. Atmospheric scintillation runs
+ * at tens of hertz, which on a 60 Hz display is an aliased mess rather than a shimmer, so the
+ * frequency here is slowed to something an eye can follow. Radians per second, so 2.6 is about
+ * four tenths of a hertz. It is off entirely when motion is reduced, along with everything else
+ * that moves.
+ */
+export const STAR_TWINKLE = 0.16;
+export const STAR_TWINKLE_RATE = 2.6;
+
+/**
+ * How tightly a star's light is gathered into the middle of its quad.
+ *
+ * The same falloff the disc layer uses, `exp(-sharp * r^2)`, at a value between the sharp end
+ * of an ISS marker and the soft end of an aurora cell. It is what makes a bright star a core
+ * with a halo around it rather than a flat circle, which is the shape a point source makes in
+ * an optical system and in an eye.
+ */
+export const STAR_CORE = 3.6;
+
+/**
+ * The widest and narrowest the view can be dragged to, in degrees across the frame.
+ *
+ * 180 is the default and puts the whole hemisphere on screen with the horizon as a complete
+ * ring. Wider than about 210 and the ring shrinks into the middle of a mostly empty frame with
+ * the antipode stretching around it, which is a projection artefact rather than a view of
+ * anything. Narrower than 20 and the stereographic projection is doing nothing a plain
+ * magnifier would not: at that scale the sky is flat and the conformal property that earns this
+ * projection its place has nothing left to preserve.
+ */
+export const FOV_MIN_DEG = 20;
+export const FOV_MAX_DEG = 210;

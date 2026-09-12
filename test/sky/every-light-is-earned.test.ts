@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { Renderer } from "../../src/sky/renderer.ts";
 import { CHROME, assertEveryLightIsEarned } from "../../src/sky/provenance.ts";
+import { STAR_COUNT } from "../../src/sky/stars.ts";
 import { Scene, sceneOptions } from "../../src/sky/scene.ts";
 import { stubGl } from "./gl-stub.ts";
 import { TWILIGHT, aurora, edit, orbit, presence, quake } from "./fixtures.ts";
@@ -138,10 +139,11 @@ describe("every light is earned", () => {
     scene.resize(900, 900, 1);
     scene.push(Array.from({ length: 500 }, (_, i) => edit(T - i * 4)));
     const afterPush = scene.ledger.size;
-    expect(afterPush).toBe(500);
+    // The catalogue is admitted at construction and never retires, so it is the floor here.
+    expect(afterPush).toBe(STAR_COUNT + 500);
     // Ten seconds on, every one of them has outlived a 2.2 second meteor.
     scene.update(T + 10_000);
-    expect(scene.ledger.size).toBe(0);
+    expect(scene.ledger.size).toBe(STAR_COUNT);
     expect([...scene.meteors.liveSlots()]).toEqual([]);
   });
 });

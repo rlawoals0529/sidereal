@@ -28,11 +28,19 @@ import {
   DISC_VERT,
   RING_FRAG,
   RING_VERT,
+  STAR_FRAG,
+  STAR_VERT,
   STREAK_FRAG,
   STREAK_VERT,
 } from "../../src/sky/gl/shaders.ts";
 
-const SOURCES = { STREAK_VERT, STREAK_FRAG, RING_VERT, RING_FRAG, DISC_VERT, DISC_FRAG, ARC_VERT, ARC_FRAG };
+const SOURCES = {
+  STREAK_VERT, STREAK_FRAG,
+  RING_VERT, RING_FRAG,
+  DISC_VERT, DISC_FRAG,
+  ARC_VERT, ARC_FRAG,
+  STAR_VERT, STAR_FRAG,
+};
 
 /**
  * Which TypeScript value each shader constant has to equal.
@@ -60,6 +68,9 @@ const EXPECTED: Record<string, number> = {
   METEOR_DRAW_S: constants.METEOR_DRAW_S,
   METEOR_MIN_DEG: constants.METEOR_MIN_DEG,
   METEOR_MAX_DEG: constants.METEOR_MAX_DEG,
+  STAR_TWINKLE: constants.STAR_TWINKLE,
+  STAR_TWINKLE_RATE: constants.STAR_TWINKLE_RATE,
+  STAR_CORE: constants.STAR_CORE,
 };
 
 function shaderConstants(src: string): Map<string, number> {
@@ -126,6 +137,14 @@ describe("the shared uniform block", () => {
     for (const [name, src] of Object.entries(SOURCES)) {
       expect(src.includes(VIEW_BLOCK), `${name} does not carry the shared View block`).toBe(true);
     }
+  });
+
+  it("covers the star program too, which is the newest way to forget it", () => {
+    // The catalogue's shader was added to the renderer before it was added to this list, and
+    // for one commit its three constants were unguarded. Naming it here is the reminder that
+    // SOURCES is a hand-kept list and a new program has to join it.
+    expect(Object.keys(SOURCES)).toContain("STAR_VERT");
+    expect(Object.keys(SOURCES)).toContain("STAR_FRAG");
   });
 
   it("is six vec4s, which is what the scene fills", () => {

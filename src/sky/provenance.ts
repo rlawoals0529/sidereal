@@ -28,17 +28,55 @@
  */
 import type { SkyEvent } from "../shared/event.ts";
 import type { Presence } from "../shared/protocol.ts";
+import type { Star } from "./stars.ts";
 
 /**
- * What a light was drawn from. Both arms are records somebody measured: a feed said this
- * happened, or a person is connected right now. There is deliberately no third arm.
+ * What a light was drawn from. Every arm is a record somebody measured: a feed said this
+ * happened, a person is connected right now, or an observatory catalogued this star.
+ *
+ * **Why `star` is a record and not chrome, at length, because the shortcut was available and
+ * is wrong.** The cheap way to get nine thousand stars on screen is to add "stars" to `CHROME`
+ * and be done: one name on a frozen list, no ledger, no per-slot bookkeeping, no memory. It
+ * would also be false. `CHROME` is for things that are not lights and do not stand for
+ * anything that was measured, and its one member says exactly that - a horizon circle is a
+ * coordinate reference, drawn in the token for a boundary, carrying no claim about the world.
+ * A star is the opposite of that. It has a position Hipparcos measured to milliarcseconds, a
+ * magnitude somebody photometered, and a colour index that is a real difference between two
+ * real filters, and this renderer draws all three. Filing it as furniture would be the first
+ * time the project printed a measurement while telling its own audit the pixel meant nothing.
+ *
+ * **Why a third arm rather than dressing a star up as an `event`.** A star did not happen. It
+ * has no `at`, no `placement`, and no `source` in the sense the feeds use, so a synthetic
+ * `SkyEvent` for one would put four fabricated fields into the type whose whole job is that
+ * every field is something a source said. The audit does not care how many arms `Backing` has;
+ * it cares that a drawn slot names a record and that the record is still there. A new arm
+ * satisfies both without inventing anything.
+ *
+ * **Why this does not weaken `assertEarned`.** The three rules are unchanged and none of them
+ * is relaxed for stars. Every star slot is admitted to the ledger individually, through the
+ * same `ledger.admit` call every other layer makes, and the layer records the key it got back:
+ * a slot written without that key still fails rule 1, and a key the ledger has forgotten still
+ * fails rule 2. The catalogue layer is a registered layer, so rule 3's "drew further than it
+ * was filled" still applies, and because the buffer is exactly the size of the catalogue there
+ * is no spare slot for anything to hide in. The invariant the audit actually enforces is that
+ * you cannot put light on this canvas without naming what it came from; nine thousand more
+ * lights that each name a catalogue row is that invariant being met, not bypassed.
+ *
+ * What WOULD bypass it is one record standing for the whole catalogue, so that any rogue slot
+ * could point at "the stars" and pass. That is the version this deliberately does not do, and
+ * it is why there are 8,920 ledger entries rather than one.
  */
 export type Backing =
   | { of: "event"; event: SkyEvent }
-  | { of: "visitor"; presence: Presence };
+  | { of: "visitor"; presence: Presence }
+  | { of: "star"; star: Star };
 
 export function backingId(b: Backing): string {
-  return b.of === "event" ? `e:${b.event.id}` : `v:${b.presence.id}`;
+  if (b.of === "event") return `e:${b.event.id}`;
+  if (b.of === "visitor") return `v:${b.presence.id}`;
+  // The catalogue index, which is the only identity a star has here and is stable for a given
+  // generated file. Prefixed like the others so it cannot collide with a revision id.
+  return `s:${b.star.index}`;
 }
 
 /**

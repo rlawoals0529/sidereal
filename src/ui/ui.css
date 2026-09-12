@@ -86,6 +86,22 @@
   overflow-wrap: anywhere;
 }
 
+/* The sky has to be reachable through the gaps in the chrome.
+
+   `.chrome` is a grid that covers the whole viewport, and a grid container is hit-testable
+   across the whole of its box whether or not anything is painted there. So every pixel of
+   apparent empty sky was in fact the chrome, and a pointer never reached the canvas underneath:
+   the hover that names a light was landing on a transparent div, and so is the drag that looks
+   around. Neither failure produces an error. The page simply does not respond, which is the
+   hardest kind of bug to see.
+
+   The grid and its three layout rows are transparent to the pointer and the panels inside them
+   take it back. Grandchildren rather than a list of class names on purpose, so the rule still
+   holds for a panel added later by somebody who has never read this line. */
+.chrome,
+.chrome > div { pointer-events: none; }
+.chrome > div > * { pointer-events: auto; }
+
 /* ---- the masthead: the ten seconds ------------------------------------------------------ */
 
 .head { grid-area: head; display: grid; gap: 10px; align-content: start; }

@@ -18,6 +18,7 @@ import {
   type SceneOptions,
 } from "../../src/sky/scene.ts";
 import type { SkyPalette } from "../../src/sky/palette.ts";
+import { STAR_COUNT } from "../../src/sky/stars.ts";
 import { TWILIGHT, paletteFromCss, aurora, edit, orbit, presence, quake } from "./fixtures.ts";
 
 const T = Date.UTC(2024, 5, 15, 3, 17, 42);
@@ -36,6 +37,30 @@ function sky(over: Over = {}) {
 }
 
 const live = (s: Scene, which: "meteors" | "quakes" | "discs"): number => [...s[which].liveSlots()].length;
+
+/**
+ * The ledger with the fixed stars discounted, so a test about events reads as one.
+ *
+ * The catalogue admits one record per star at construction and never retires any of them, so
+ * the floor is `STAR_COUNT` rather than zero. Subtracting it here rather than writing
+ * `STAR_COUNT + 1` at each assertion keeps the ARITHMETIC in one place: if a star ever failed
+ * to be admitted this would go negative and every one of these would fail, which is the
+ * behaviour you want from a baseline.
+ */
+const eventRecords = (s: Scene): number => s.ledger.size - STAR_COUNT;
+
+/**
+ * What the feeds put under the cursor, with the catalogue ignored.
+ *
+ * The star layer answers wherever no event does, and at a 180 degree field of view most pixels
+ * have a star within a few of them, so "nothing here" now means "nothing of ours here". The
+ * rule that an event always beats a star is checked on its own, further down; this helper is
+ * for the tests that were about events before the sky had stars in it.
+ */
+const eventHit = (s: Scene, x: number, y: number) => {
+  const hit = s.hitTest(x, y);
+  return hit === null || hit.kind === "star" ? null : hit;
+};
 
 describe("ingestion", () => {
   it("puts one light up per edit", () => {
@@ -63,7 +88,7 @@ describe("ingestion", () => {
     expect(live(s, "meteors")).toBe(1);
     s.update(T + METEOR_LIFE_S * 1000 + 50);
     expect(live(s, "meteors")).toBe(0);
-    expect(s.ledger.size).toBe(0);
+    expect(eventRecords(s)).toBe(0);
   });
 
   it("keeps a quake for six minutes, which is a hundred and sixty times longer", () => {
@@ -273,7 +298,7 @@ describe("pointing at a light", () => {
     s.push([quake(T - 300_000, OVERHEAD)]);
     s.update(T);
     // 3.5 km/s for five minutes is 1050 km, which at this scale is 36 pixels out.
-    expect(s.hitTest(450, 450)).toBeNull();
+    expect(eventHit(s, 450, 450)).toBeNull();
     const onRing = s.hitTest(450 + 36, 450);
     expect(onRing).not.toBeNull();
     expect(onRing!.kind).toBe("quake");
@@ -285,7 +310,7 @@ describe("pointing at a light", () => {
     s.push([quake(T, { lat: -HERE.latDeg, lon: HERE.lonDeg + 180 })]);
     s.update(T + 1000);
     for (let x = 0; x <= 900; x += 30) {
-      for (let y = 0; y <= 900; y += 30) expect(s.hitTest(x, y)).toBeNull();
+      for (let y = 0; y <= 900; y += 30) expect(eventHit(s, x, y)).toBeNull();
     }
   });
 
@@ -293,7 +318,7 @@ describe("pointing at a light", () => {
     const s = sky();
     s.push([edit(T, OVERHEAD)]);
     s.update(T + 300);
-    expect(s.hitTest(120, 120)).toBeNull();
+    expect(eventHit(s, 120, 120)).toBeNull();
   });
 
   it("prefers the nearer of two overlapping lights", () => {

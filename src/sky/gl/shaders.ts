@@ -263,3 +263,74 @@ void main() {
   emit(uInk, vAlpha * exp(-1.6 * vAcross * vAcross));
 }
 `);
+
+/**
+ * The fixed stars. One instanced draw, 8,920 quads, and nothing per frame but the rotation.
+ *
+ * Every per-star number that could be worked out in advance was: brightness from magnitude,
+ * diameter from brightness, colour from the colour index and the palette. All of it is written
+ * into the instance buffer once, at load, by `stars.ts`, which is also the only copy of those
+ * curves in the project. Doing it here instead would have meant a second implementation of the
+ * magnitude scale for the parity test to guard, for arithmetic whose inputs never change.
+ *
+ * What is left is what genuinely varies: where the star is in the observer's sky this instant,
+ * how much air its light came through, and the shimmer. That is the same rotation uniform every
+ * other layer reads, so adding the catalogue costs one more draw call and no new per-frame work.
+ *
+ * The diameter is in DEVICE PIXELS, not degrees, and that is the one place a star deliberately
+ * behaves unlike an aurora cell. A star is unresolvable: what is on screen is a point spread
+ * function, so it is sized in pixels and zooming magnifies the image the way magnifying a
+ * photograph magnifies the grain. Carrying it through the conformal factor instead, as the disc
+ * layer does, would grow Sirius to a twenty-pixel ball at a 25 degree field of view.
+ */
+export const STAR_VERT = vertexSource(`
+in vec2 aEq;      // declination and right ascension, radians, J2000
+in vec2 aPoint;   // drawn diameter in device px, brightness 0..1
+in vec3 aColor;
+in float aSeed;   // 0..1, from the catalogue index, so no two stars shimmer in step
+
+out vec2 vUv;
+out vec3 vColor;
+out float vAlpha;
+
+const float STAR_TWINKLE = 0.16;
+const float STAR_TWINKLE_RATE = 2.6;
+
+void main() {
+  vec2 h = skyHorizontal(aEq.x, aEq.y, uLst);
+  vec4 p = skyProject(skyLocal(h));
+  float ext = skyExtinction(h.x);
+  if (p.z < 0.5 || ext <= 0.0) { gl_Position = skyDiscard(); vAlpha = 0.0; return; }
+
+  // Scintillation. A star is a point source, so the whole of it moves with one pocket of air
+  // and the brightness wanders; the amplitude follows airmass because that dependence is real,
+  // which is why the stars near the horizon flicker and the ones overhead barely do. Clamped
+  // at three airmasses, where extinction has already taken most of the light anyway. Zero when
+  // motion is reduced, like everything else that moves.
+  float live = 1.0 - uFrozen;
+  float shimmer = 1.0 + STAR_TWINKLE * live
+    * clamp(skyAirmass(h.x) - 1.0, 0.0, 3.0)
+    * sin(uNow * STAR_TWINKLE_RATE + aSeed * 6.2832);
+
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  gl_Position = skyClip(p.xy + corner * (aPoint.x * 0.5));
+
+  vUv = corner;
+  vColor = aColor;
+  vAlpha = aPoint.y * ext * shimmer;
+}
+`);
+
+export const STAR_FRAG = fragmentSource(`
+in vec2 vUv;
+in vec3 vColor;
+in float vAlpha;
+
+const float STAR_CORE = 3.6;
+
+void main() {
+  float d2 = dot(vUv, vUv);
+  if (d2 > 1.0) discard;
+  emit(vColor, vAlpha * exp(-STAR_CORE * d2));
+}
+`);

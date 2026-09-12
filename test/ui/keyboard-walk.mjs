@@ -164,9 +164,22 @@ check("and the page says it is being held", held.notice.includes("held while you
 /* Then it lands when focus leaves. */
 await page.locator(".session__go").focus();
 await page.waitForTimeout(120);
+// Present in the list, and leading its own kind. Asserting it was first overall used to work
+// and was an accident of the list being sorted purely by time: the register now leads with the
+// rarest feed, so an edit sits below any quake or station row no matter how new it is. What is
+// actually being guarded is that a held arrival lands rather than being lost, and that within
+// its kind it is still the newest, so both are checked instead of the position it happens to
+// land at.
+const labels = await page.locator(".entry").evaluateAll((rows) =>
+  rows.map((r) => r.getAttribute("aria-label") ?? ""),
+);
+const landedAt = labels.findIndex((l) => l.includes("arrived while reading"));
+check("the held light lands when focus leaves the list", landedAt >= 0);
+const firstEdit = labels.findIndex((l) => /wikipedia edit/i.test(l));
 check(
-  "the held light lands when focus leaves the list",
-  (await page.locator(".entry").first().getAttribute("aria-label"))?.includes("arrived while reading"),
+  "and it leads its own kind, because within a feed the list is still newest first",
+  landedAt >= 0 && landedAt === firstEdit,
+  `landed at ${landedAt}, first edit at ${firstEdit}`,
 );
 
 /* The ritual starts from the keyboard. */

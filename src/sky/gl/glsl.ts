@@ -93,10 +93,13 @@ vec4 skyProject(vec3 v) {
   return vec4(k * dot(v, uRight) * uScale, k * dot(v, uUp) * uScale, 1.0, k);
 }
 
+float skyAirmass(float alt) {
+  return 1.0 / (sin(alt) + KASTEN_YOUNG_A * pow(alt * DEG_PER_RAD + KASTEN_YOUNG_B, KASTEN_YOUNG_C));
+}
+
 float skyExtinction(float alt) {
   if (alt <= 0.0) return 0.0;
-  float airmass = 1.0 / (sin(alt) + KASTEN_YOUNG_A * pow(alt * DEG_PER_RAD + KASTEN_YOUNG_B, KASTEN_YOUNG_C));
-  return pow(10.0, -0.4 * EXTINCTION_K * (airmass - 1.0));
+  return pow(10.0, -0.4 * EXTINCTION_K * (skyAirmass(alt) - skyAirmass(PI * 0.5)));
 }
 
 /** Pixels to clip space. The one place the y flip lives. */

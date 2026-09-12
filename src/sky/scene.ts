@@ -1,0 +1,807 @@
+/**
+ * The sky with no GPU attached: what is up there, where it is, and what it means.
+ *
+ * Everything in this file runs in plain node, which is the point. The projection, the
+ * ingestion, the retiring, the hit test and the provenance audit are the parts with answers
+ * that can be right or wrong, so they are kept where a test can reach them without a browser
+ * and a canvas. `renderer.ts` is the part that only knows how to upload and draw, and it has
+ * no arithmetic of its own worth testing.
+ *
+ * Placement, per kind, and the honesty each one costs:
+ *
+ * - **edit, quake, orbit, aurora** carry latitude and longitude and go onto the celestial
+ *   sphere at the point that was overhead them when they happened. They turn with it.
+ * - **a visitor** carries no position at all. The only spatial thing a person sends is where
+ *   they are looking, so that is where their light goes, in the viewer's own horizontal
+ *   frame, live. It does not turn with the sky, because it is not on the sky. Two people
+ *   looking at the same patch overlap, and that overlap is true rather than a bug.
+ *
+ * The remaining honesty problem is `placement`, which is the feed's word and not ours: an
+ * edit says `regional`, and every hit on one hands that straight back so the panel can say
+ * the position is the wiki's region and not the editor's desk.
+ */
+import type { EventKind, SkyEvent } from "../shared/event.ts";
+import type { Presence } from "../shared/protocol.ts";
+import {
+  DEG,
+  RAD,
+  celestialPoint,
+  diurnalDirection,
+  horizontal,
+  localVec,
+  planeRadius,
+  stereographic,
+  viewFrame,
+  type Observer,
+  type ViewFrame,
+} from "./astro.ts";
+import {
+  AURORA_FADE_S,
+  EARTH_RADIUS_KM,
+  METEOR_DRAW_S,
+  METEOR_LIFE_S,
+  METEOR_MAX_DEG,
+  METEOR_MIN_DEG,
+  QUAKE_LIFE_S,
+  RAYLEIGH_KM_S,
+  STILL_EXPOSURE,
+} from "./constants.ts";
+import { FifoLayer, PathLayer, SlotLayer, type LayerStats } from "./layers.ts";
+import { parseColour, type PaletteSource, type RGB, type SkyPalette } from "./palette.ts";
+import { Ledger, audit, type Audit, type Auditable, type DrawReport } from "./provenance.ts";
+
+export type { Observer } from "./astro.ts";
+
+/** Floats per instance. Kept beside the attribute wiring in `renderer.ts`; change both. */
+export const STREAK_STRIDE = 4;
+export const RING_STRIDE = 4;
+export const DISC_STRIDE = 14;
+export const ARC_STRIDE = 6;
+
+/** Offsets of the one field in each layout that a clock rebase has to shift. */
+const STREAK_TIME = 2;
+const RING_TIME = 2;
+const DISC_TIME = 4;
+
+/** Once an hour, before float32 seconds lose enough resolution for meteors to judder. */
+const REBASE_AFTER_MS = 3_600_000;
+
+const HORIZON_POINTS = 288;
+
+export type SceneOptions = {
+  observer: Observer;
+  palette: SkyPalette;
+  fovDeg: number;
+  reducedMotion: boolean;
+  showSelf: boolean;
+  /** Maps a visitor's yozora palette id to their accent colour, so they show up as themselves. */
+  resolveAccent: ((paletteId: string) => string | null) | null;
+  capacity: { meteors: number; quakes: number; discs: number; track: number };
+  epochMs: number;
+};
+
+/**
+ * Slots per layer. `track` is in fixes, and at 1 Hz the default is three minutes of real
+ * orbit; the others are sized for the arrival rates in the concept document with headroom,
+ * and `stats().layers[n].dropped` is how you find out one of them is too small.
+ */
+export const DEFAULT_CAPACITY = { meteors: 4096, quakes: 512, discs: 8192, track: 180 };
+
+export type Hit = {
+  kind: EventKind | "visitor";
+  /** The record, verbatim. The panel prints `label` and `source` from here and nothing else. */
+  event: SkyEvent | null;
+  visitor: Presence | null;
+  altDeg: number;
+  azDeg: number;
+  /** CSS pixels, where the light actually landed. */
+  x: number;
+  y: number;
+  distancePx: number;
+  /** What the drawing is saying, so the panel can explain the picture as well as the record. */
+  encoding: string;
+  /** True when the feed placed this by region rather than measuring it. */
+  inferredPlacement: boolean;
+};
+
+type VisitorState = { presence: Presence; isSelf: boolean };
+
+/** Deterministic, so a light drifts the same way across a reload. FNV-1a, 32 bit. */
+export function seedOf(key: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return ((h >>> 0) % 100000) / 100000;
+}
+
+/**
+ * The key an aurora cell is stored under.
+ *
+ * Deliberately not the event id. OVATION reports the same grid cell every five minutes, and
+ * whether the normalizer gives that a stable id or one that carries the poll timestamp is its
+ * business, not ours. Keying by the coordinate means a cell always updates its own light
+ * rather than adding a second one beside it, whichever choice the normalizer made. Two
+ * decimal places is finer than any OVATION grid, so it cannot merge two real cells.
+ */
+export function auroraCellKey(e: SkyEvent): string {
+  return `aurora:${e.lat.toFixed(2)}:${e.lon.toFixed(2)}`;
+}
+
+export class Scene {
+  readonly ledger = new Ledger();
+  readonly meteors: FifoLayer;
+  readonly quakes: FifoLayer;
+  readonly discs: SlotLayer;
+  readonly track: PathLayer;
+  readonly horizon: PathLayer;
+
+  private opts: SceneOptions;
+  private visitors = new Map<string, VisitorState>();
+  private trackFixes: SkyEvent[] = [];
+  private frame: ViewFrame;
+  private epochMs: number;
+  private nowMs: number;
+  private widthCss = 1;
+  private heightCss = 1;
+  private dpr = 1;
+  /** Device pixels per plane unit. Everything the shader does with sizes goes through this. */
+  private scale = 1;
+  private paletteRev = 0;
+
+  readonly uniforms = new Float32Array(24);
+
+  constructor(opts: SceneOptions) {
+    this.opts = opts;
+    this.epochMs = opts.epochMs;
+    this.nowMs = opts.epochMs;
+    this.meteors = new FifoLayer("meteors", opts.capacity.meteors, STREAK_STRIDE, this.ledger);
+    this.quakes = new FifoLayer("quakes", opts.capacity.quakes, RING_STRIDE, this.ledger);
+    this.discs = new SlotLayer("discs", opts.capacity.discs, DISC_STRIDE, this.ledger);
+    this.track = new PathLayer("track", opts.capacity.track, this.ledger);
+    // The horizon is not a light layer and is never handed to the audit as one. It is
+    // declared chrome, and the audit checks it by name on the draw side instead.
+    this.horizon = new PathLayer("horizon", HORIZON_POINTS + 1, this.ledger);
+    this.frame = viewFrame(opts.observer, this.epochMs);
+    this.buildHorizon();
+  }
+
+  /** The layers the provenance audit walks. Chrome is deliberately not among them. */
+  auditableLayers(): Auditable[] {
+    return [this.meteors, this.quakes, this.discs, this.track];
+  }
+
+  get palette(): SkyPalette {
+    return this.opts.palette;
+  }
+
+  get observer(): Observer {
+    return this.opts.observer;
+  }
+
+  get reducedMotion(): boolean {
+    return this.opts.reducedMotion;
+  }
+
+  get exposure(): number {
+    return this.opts.reducedMotion ? STILL_EXPOSURE : 1;
+  }
+
+  get paletteRevision(): number {
+    return this.paletteRev;
+  }
+
+  // ---------------------------------------------------------------- ingestion
+
+  push(events: readonly SkyEvent[]): void {
+    for (const e of events) this.pushOne(e);
+  }
+
+  private pushOne(e: SkyEvent): void {
+    switch (e.kind) {
+      case "edit":
+        this.pushTransient(this.meteors, e);
+        return;
+      case "quake":
+        this.pushTransient(this.quakes, e);
+        return;
+      case "aurora":
+        this.pushAurora(e);
+        return;
+      case "orbit":
+        this.pushOrbit(e);
+        return;
+    }
+  }
+
+  /**
+   * Meteors and quakes, and the replay guard.
+   *
+   * `SkyEvent.id` is stable at the source precisely so a replayed batch cannot double render,
+   * and the ledger already holds a key per live light, so asking it is the whole check. An id
+   * that has already aged off the sky is not rejected, which is right: it would be re-added
+   * with its original timestamp and retired on the same frame.
+   */
+  private pushTransient(layer: FifoLayer, e: SkyEvent): void {
+    if (this.ledger.get(`e:${e.id}`)) return;
+    const eq = celestialPoint(e.lat, e.lon, e.at);
+    const t = (e.at - this.epochMs) / 1000;
+    const mag = clamp01(e.magnitude);
+    layer.push({ of: "event", event: e }, e.at, (into, at) => {
+      into[at] = eq.dec;
+      into[at + 1] = eq.ra;
+      into[at + 2] = t;
+      into[at + 3] = mag;
+    });
+  }
+
+  private pushAurora(e: SkyEvent): void {
+    const key = auroraCellKey(e);
+    const eq = celestialPoint(e.lat, e.lon, e.at);
+    // OVATION probability is 0..1 already, and the two numbers here are the difference
+    // between a band and a bruise.
+    //
+    // Cells overlap: the grid is finer than a cell is wide, so roughly eight of them land on
+    // any given pixel and the blend is additive. A generous per-cell alpha therefore sums to
+    // a solid wash, which is exactly the soft glowing blob this project exists not to be. The
+    // ceiling here is what one cell contributes to a texture, not how bright the aurora is.
+    //
+    // Tune this against a SETTLED band, not a fresh one. A cell crosses to its new value over
+    // forty seconds, so a screenshot taken four seconds after a poll lands is showing a tenth
+    // of the brightness it is heading for, and the first pass of this number was set from
+    // exactly such a screenshot and came out four times too high.
+    //
+    // The exponent holds the faint edge of the oval down so the band keeps its shape rather
+    // than smearing out to its own threshold.
+    const target = Math.pow(clamp01(e.magnitude), 1.6) * 0.1;
+    const slot = this.discs.slotFor(key);
+    const from = slot === undefined ? 0 : this.currentDiscAlpha(slot);
+    const colour = this.opts.palette.aurora;
+    this.discs.upsert(key, { of: "event", event: e }, (into, at) => {
+      writeDisc(into, at, {
+        a: eq.dec,
+        b: eq.ra,
+        from,
+        to: target,
+        startSec: (this.nowMs - this.epochMs) / 1000,
+        durSec: AURORA_FADE_S,
+        // Close to a real OVATION cell, which is about a degree of latitude by two of
+        // longitude. Larger than that and neighbours stop being distinguishable.
+        sizeDeg: 3,
+        soften: 1,
+        driftPx: 0,
+        horizontalSpace: false,
+        colour,
+        seed: seedOf(key),
+      });
+    });
+  }
+
+  private pushOrbit(e: SkyEvent): void {
+    if (this.ledger.get(`e:${e.id}`) && this.trackFixes.some((f) => f.id === e.id)) return;
+    const eq = celestialPoint(e.lat, e.lon, e.at);
+    this.discs.upsert("iss", { of: "event", event: e }, (into, at) => {
+      writeDisc(into, at, {
+        a: eq.dec,
+        b: eq.ra,
+        from: 1,
+        to: 1,
+        startSec: 0,
+        durSec: 1,
+        sizeDeg: 2,
+        soften: 0.15,
+        driftPx: 0,
+        horizontalSpace: false,
+        colour: this.opts.palette.orbit,
+        seed: 0,
+      });
+    });
+    this.trackFixes.push(e);
+    // Off the capacity rather than off a constant of its own. The path layer truncates to the
+    // capacity it was built with, so a second number here would silently keep fixes that
+    // never get drawn.
+    if (this.trackFixes.length > this.opts.capacity.track) this.trackFixes.shift();
+    this.rebuildTrack();
+  }
+
+  private rebuildTrack(): void {
+    const n = this.trackFixes.length;
+    this.track.set(
+      this.trackFixes.map((f, i) => {
+        const eq = celestialPoint(f.lat, f.lon, f.at);
+        return {
+          a: eq.dec,
+          b: eq.ra,
+          // Oldest end nearly gone, newest end full. The track is a memory of where it has
+          // been, and a memory that does not fade is a line.
+          fade: 0.1 + 0.9 * ((i + 1) / n) ** 2,
+          backing: { of: "event" as const, event: f },
+        };
+      }),
+    );
+  }
+
+  // ---------------------------------------------------------------- visitors
+
+  upsertVisitor(p: Presence, isSelf = false): void {
+    this.visitors.set(p.id, { presence: p, isSelf });
+    this.writeVisitor(p, isSelf);
+  }
+
+  removeVisitor(id: string): void {
+    this.visitors.delete(id);
+    this.discs.remove(`visitor:${id}`);
+  }
+
+  setFocus(id: string, on: boolean): void {
+    const v = this.visitors.get(id);
+    if (!v) return;
+    v.presence = { ...v.presence, focused: on };
+    this.writeVisitor(v.presence, v.isSelf);
+  }
+
+  setGaze(id: string, azDeg: number, altDeg: number): void {
+    const v = this.visitors.get(id);
+    if (!v) return;
+    v.presence = { ...v.presence, az: azDeg, alt: altDeg };
+    this.writeVisitor(v.presence, v.isSelf);
+  }
+
+  private writeVisitor(p: Presence, isSelf: boolean): void {
+    if (isSelf && !this.opts.showSelf) return;
+    const key = `visitor:${p.id}`;
+    const slot = this.discs.slotFor(key);
+    const from = slot === undefined ? 0 : this.currentDiscAlpha(slot);
+    const alpha = p.focused ? 0.95 : 0.6;
+    // The contrast the whole social layer rests on, in two channels so it survives being
+    // small: a focused light is bigger and brighter, and its drift is exactly zero. The
+    // shader reads a zero drift as "do not scintillate either", so a focused star is the only
+    // thing in the sky that is completely still.
+    const sizeDeg = (isSelf ? 0.9 : 0) + (p.focused ? 2.1 : 1.5);
+    const driftPx = p.focused ? 0 : 2.4;
+    const colour = this.visitorColour(p, isSelf);
+    this.discs.upsert(key, { of: "visitor", presence: p }, (into, at) => {
+      writeDisc(into, at, {
+        a: p.alt * DEG,
+        b: p.az * DEG,
+        from,
+        to: alpha,
+        startSec: (this.nowMs - this.epochMs) / 1000,
+        // A focus session starting is a thing you should see happen, so it takes a beat
+        // rather than a step, and it is the only fast crossfade in here.
+        durSec: 1.2,
+        sizeDeg,
+        soften: 0,
+        driftPx,
+        horizontalSpace: true,
+        colour,
+        seed: seedOf(key),
+      });
+    });
+  }
+
+  private visitorColour(p: Presence, isSelf: boolean): RGB {
+    if (isSelf) return this.opts.palette.you;
+    const hex = this.opts.resolveAccent?.(p.palette) ?? null;
+    if (hex === null) return this.opts.palette.visitor;
+    return parseOr(hex, this.opts.palette.visitor);
+  }
+
+  private currentDiscAlpha(slot: number): number {
+    const o = slot * DISC_STRIDE;
+    const d = this.discs.data;
+    const from = d[o + 2]!;
+    const to = d[o + 3]!;
+    const start = d[o + 4]!;
+    const dur = Math.max(d[o + 5]!, 0.001);
+    const t = clamp01(((this.nowMs - this.epochMs) / 1000 - start) / dur);
+    return from + (to - from) * t;
+  }
+
+  // ---------------------------------------------------------------- view state
+
+  setObserver(o: Observer): void {
+    this.opts = { ...this.opts, observer: o };
+  }
+
+  look(azDeg: number, altDeg: number): void {
+    this.opts = { ...this.opts, observer: { ...this.opts.observer, gazeAzDeg: azDeg, gazeAltDeg: altDeg } };
+  }
+
+  setFov(deg: number): void {
+    this.opts = { ...this.opts, fovDeg: Math.max(20, Math.min(300, deg)) };
+    this.resize(this.widthCss, this.heightCss, this.dpr);
+  }
+
+  setReducedMotion(on: boolean): void {
+    this.opts = { ...this.opts, reducedMotion: on };
+  }
+
+  /**
+   * Re-read the palette and repaint everything that carries a colour in its instance data.
+   *
+   * Only the disc layer does; meteors, rings, the track and the horizon take their colour
+   * from a uniform, so they cost nothing. The discs are rewritten rather than tinted because
+   * a visitor's colour comes from their own palette and an aurora cell's from the viewer's,
+   * and only the writer knows which.
+   */
+  setPalette(p: SkyPalette): void {
+    this.opts = { ...this.opts, palette: p };
+    this.paletteRev++;
+    for (const v of this.visitors.values()) this.writeVisitor(v.presence, v.isSelf);
+    const d = this.discs.data;
+    for (const slot of this.discs.liveSlots()) {
+      const key = this.discs.slotBacking(slot);
+      if (key === null) continue;
+      const backing = this.ledger.get(key);
+      if (!backing || backing.of !== "event") continue;
+      const colour = backing.event.kind === "orbit" ? p.orbit : p.aurora;
+      const o = slot * DISC_STRIDE;
+      d[o + 10] = colour[0];
+      d[o + 11] = colour[1];
+      d[o + 12] = colour[2];
+      this.discs.touchSlot(slot);
+    }
+  }
+
+  resize(widthCss: number, heightCss: number, dpr: number): void {
+    this.widthCss = Math.max(1, widthCss);
+    this.heightCss = Math.max(1, heightCss);
+    this.dpr = Math.max(0.5, dpr);
+    const edgePx = (Math.min(this.widthCss, this.heightCss) * this.dpr) / 2;
+    // Two percent of margin so the horizon ring is inside the frame rather than tangent to
+    // it, which reads as a crop rather than as a boundary.
+    this.scale = (edgePx * 0.98) / planeRadius((this.opts.fovDeg / 2) * DEG);
+  }
+
+  /** The observer frame the last `update` computed. Read by the 2D still fallback. */
+  get view(): ViewFrame {
+    return this.frame;
+  }
+
+  get nowEpochMs(): number {
+    return this.nowMs;
+  }
+
+  get epoch(): number {
+    return this.epochMs;
+  }
+
+  get viewport(): { widthCss: number; heightCss: number; dpr: number; scale: number } {
+    return { widthCss: this.widthCss, heightCss: this.heightCss, dpr: this.dpr, scale: this.scale };
+  }
+
+  // ---------------------------------------------------------------- per frame
+
+  /**
+   * Everything a frame needs, done once.
+   *
+   * Retire, rebase if the clock has drifted far enough to matter, recompute the observer's
+   * frame, fill the uniform block. Nothing here is proportional to how many lights are on the
+   * sky: the two retire loops walk only what actually expired.
+   */
+  update(nowMs: number): void {
+    this.nowMs = nowMs;
+    if (nowMs - this.epochMs > REBASE_AFTER_MS) this.rebaseClock(nowMs);
+
+    const exposure = this.exposure;
+    this.meteors.retire(nowMs, METEOR_LIFE_S * 1000 * exposure);
+    this.quakes.retire(nowMs, QUAKE_LIFE_S * 1000 * exposure);
+
+    this.frame = viewFrame(this.opts.observer, nowMs);
+    this.fillUniforms();
+  }
+
+  /**
+   * Move the epoch forward so instance times stay small.
+   *
+   * float32 holds about seven significant digits. At a day old, a stored time in seconds has
+   * 5ms of resolution, and a meteor whose whole life is 2.2 seconds quantises visibly. This
+   * is the fix, and it is the reason a tab left open for a week looks the same as one opened
+   * a minute ago.
+   */
+  private rebaseClock(nowMs: number): void {
+    const delta = nowMs - this.epochMs - 60_000;
+    this.meteors.rebase(delta, STREAK_TIME);
+    this.quakes.rebase(delta, RING_TIME);
+    this.discs.rebase(delta, DISC_TIME);
+    this.epochMs += delta;
+  }
+
+  private fillUniforms(): void {
+    const u = this.uniforms;
+    const f = this.frame;
+    const p = this.opts.palette;
+    const wPx = this.widthCss * this.dpr;
+    const hPx = this.heightCss * this.dpr;
+
+    u[0] = f.right.x; u[1] = f.right.y; u[2] = f.right.z; u[3] = this.scale;
+    u[4] = f.up.x; u[5] = f.up.y; u[6] = f.up.z; u[7] = 0.85 * this.dpr;
+    u[8] = f.forward.x; u[9] = f.forward.y; u[10] = f.forward.z;
+    u[11] = (this.nowMs - this.epochMs) / 1000;
+    u[12] = f.lst; u[13] = f.sinPhi; u[14] = f.cosPhi;
+    u[15] = p.scheme === "light" ? 1 : 0;
+    u[16] = 2 / wPx; u[17] = 2 / hPx;
+    u[18] = this.exposure;
+    u[19] = this.opts.reducedMotion ? 1 : 0;
+    u[20] = p.bg[0]; u[21] = p.bg[1]; u[22] = p.bg[2];
+    u[23] = 1;
+  }
+
+  // ---------------------------------------------------------------- chrome
+
+  /**
+   * The horizon, and the compass in it.
+   *
+   * A ring at altitude zero, in horizontal coordinates, so it does not turn with the sky. The
+   * four cardinal points are the same ring brightened over six degrees of azimuth rather than
+   * four extra marks, and North is brighter than the other three so the ring says which way
+   * round it is without a label. One element instead of five, which is the whole argument for
+   * doing it this way.
+   */
+  private buildHorizon(): void {
+    const pts: { a: number; b: number; fade: number; backing: null }[] = [];
+    for (let i = 0; i <= HORIZON_POINTS; i++) {
+      const az = ((i % HORIZON_POINTS) / HORIZON_POINTS) * 360;
+      let fade = 0.34;
+      for (const [card, weight] of [[0, 1], [90, 0.5], [180, 0.5], [270, 0.5]] as const) {
+        // Signed difference in degrees, wrapped to [-180, 180], so the arc around azimuth 0
+        // does not break in half at the seam.
+        const diff = Math.abs(((az - card + 540) % 360) - 180);
+        const near = Math.max(0, 1 - diff / 6);
+        fade = Math.max(fade, 0.34 + 0.66 * weight * near * near);
+      }
+      pts.push({ a: 0, b: az * DEG, fade, backing: null });
+    }
+    this.horizon.set(pts);
+  }
+
+  // ---------------------------------------------------------------- audit
+
+  runAudit(draws: readonly DrawReport[]): Audit {
+    return audit(this.ledger, this.auditableLayers(), draws);
+  }
+
+  stats(): { layers: LayerStats[]; ledger: number; visitors: number; epochMs: number } {
+    return {
+      layers: [this.meteors.stats(), this.quakes.stats(), this.discs.stats(), this.track.stats()],
+      ledger: this.ledger.size,
+      visitors: this.visitors.size,
+      epochMs: this.epochMs,
+    };
+  }
+
+  // ---------------------------------------------------------------- hit test
+
+  /**
+   * What is under the cursor, so the panel can say exactly what it was.
+   *
+   * Brute force over every live light, on purpose. Four thousand lights is four thousand
+   * projections, which is under a tenth of a millisecond; a spatial index would be a second
+   * copy of the scene to keep in step with the first for no measurable gain. Hover is not a
+   * frame, and this is the one place where doing the simple thing is also the fast thing.
+   *
+   * The geometry each kind is tested against is its real geometry: the distance to a streak
+   * is the distance to the segment, and to a quake it is the distance to the ring's
+   * circumference rather than to its centre, because the middle of a quake ring is empty and
+   * clicking empty sky should not select it.
+   *
+   * The one thing mirrored from the shader here is the idle visitor's drift. If you change
+   * the wobble in `DISC_VERT` you have to change it here, or hovering a drifting star will
+   * pick up the star it used to be.
+   */
+  hitTest(xCss: number, yCss: number, radiusCss = 13): Hit | null {
+    const cx = this.widthCss / 2;
+    const cy = this.heightCss / 2;
+    // Everything below works in CSS pixels about the centre of the canvas, with y up, so the
+    // scale has to come back down by the device pixel ratio the uniform took it up by.
+    const s = this.scale / this.dpr;
+    const px = xCss - cx;
+    const py = -(yCss - cy);
+    const nowSec = (this.nowMs - this.epochMs) / 1000;
+    const exposure = this.exposure;
+    const f = this.frame;
+
+    let best: Hit | null = null;
+    let bestDist = radiusCss;
+
+    /** To CSS pixels about the centre, with the conformal factor the caller needs for sizes. */
+    const project = (
+      dec: number,
+      ra: number,
+      alreadyHorizontal = false,
+    ): { x: number; y: number; k: number; alt: number; az: number } | null => {
+      const h = alreadyHorizontal ? { alt: dec, az: ra } : horizontal({ dec, ra }, f.lst, f.sinPhi, f.cosPhi);
+      if (h.alt <= 0) return null;
+      const v = localVec(h);
+      const p = stereographic(v, f);
+      if (!p) return null;
+      const z = v.x * f.forward.x + v.y * f.forward.y + v.z * f.forward.z;
+      return { x: p.x * s, y: p.y * s, k: 2 / (1 + z), alt: h.alt, az: h.az };
+    };
+
+    // Meteors: distance to the streak, which is a segment, not to the point it grew from.
+    for (const slot of this.meteors.liveSlots()) {
+      const d = this.meteors.data;
+      const o = slot * STREAK_STRIDE;
+      const dec = d[o]!;
+      const ra = d[o + 1]!;
+      const p = project(dec, ra);
+      if (!p) continue;
+      const mag = d[o + 3]!;
+      const drawn = smoothstep01(clamp01((nowSec - d[o + 2]!) / (METEOR_DRAW_S * exposure)));
+      const len = (METEOR_MIN_DEG + (METEOR_MAX_DEG - METEOR_MIN_DEG) * mag) * DEG * p.k * s * drawn;
+      const dir = diurnalDirection({ dec, ra }, f);
+      const hx = p.x + (dir?.dx ?? 0) * len;
+      const hy = p.y + (dir?.dy ?? 0) * len;
+      const dist = distanceToSegment(px, py, p.x, p.y, hx, hy);
+      if (dist >= bestDist) continue;
+      const backing = this.backingOf(this.meteors.slotBacking(slot));
+      if (!backing || backing.of !== "event") continue;
+      best = this.hitOf(backing.event, null, p.alt, p.az, dist, hx, hy, cx, cy,
+        `length and brightness are the magnitude the feed reported, ${Math.round(mag * 100)} percent, which for an edit is bytes changed. The direction is the sky's own rotation carrying that point, not a path the edit took.`);
+      bestDist = dist;
+    }
+
+    // Quakes: distance to the circumference. The middle of a ring is empty sky and clicking
+    // empty sky should not select the earthquake that happens to be centred on it.
+    for (const slot of this.quakes.liveSlots()) {
+      const d = this.quakes.data;
+      const o = slot * RING_STRIDE;
+      const p = project(d[o]!, d[o + 1]!);
+      if (!p) continue;
+      const age = nowSec - d[o + 2]!;
+      const rRad = (RAYLEIGH_KM_S * age) / EARTH_RADIUS_KM;
+      // Conformal, so a small circle of angular radius r lands at plane radius r times k.
+      const rPx = rRad * p.k * s;
+      const dist = Math.abs(Math.hypot(px - p.x, py - p.y) - rPx);
+      if (dist >= bestDist) continue;
+      const backing = this.backingOf(this.quakes.slotBacking(slot));
+      if (!backing || backing.of !== "event") continue;
+      best = this.hitOf(backing.event, null, p.alt, p.az, dist, p.x, p.y, cx, cy,
+        `the ring is the Rayleigh surface wave at 3.5 km per second, ${Math.round(RAYLEIGH_KM_S * age)} km out after ${Math.round(age)} seconds.`);
+      bestDist = dist;
+    }
+
+    // Discs: aurora cells, the ISS head, and the people.
+    for (const slot of this.discs.liveSlots()) {
+      const d = this.discs.data;
+      const o = slot * DISC_STRIDE;
+      const p = project(d[o]!, d[o + 1]!, d[o + 9]! > 0.5);
+      if (!p) continue;
+      // Mirrored from DISC_VERT. Change the wobble there and you must change it here, or
+      // hovering a drifting star picks up where it was rather than where it is.
+      const driftPx = d[o + 8]!;
+      let hx = p.x;
+      let hy = p.y;
+      if (driftPx > 0 && !this.opts.reducedMotion) {
+        const seed = d[o + 13]!;
+        hx += driftPx * Math.sin(nowSec * 0.11 + seed * 6.2832);
+        hy += driftPx * Math.sin(nowSec * 0.083 + seed * 9.911);
+      }
+      const dist = Math.hypot(px - hx, py - hy);
+      if (dist >= bestDist) continue;
+      const backing = this.backingOf(this.discs.slotBacking(slot));
+      if (!backing) continue;
+      if (backing.of === "visitor") {
+        const who = backing.presence;
+        best = this.hitOf(null, who, p.alt, p.az, dist, hx, hy, cx, cy,
+          who.focused
+            ? "in a focus session, so it holds perfectly still. Placed where they are looking, which is the only position anyone sends."
+            : "idle, so it drifts and scintillates. Placed where they are looking, which is the only position anyone sends.");
+      } else {
+        const e = backing.event;
+        best = this.hitOf(e, null, p.alt, p.az, dist, hx, hy, cx, cy,
+          e.kind === "aurora"
+            ? `brightness is the OVATION probability at this cell, ${Math.round(e.magnitude * 100)} percent.`
+            : "the ISS, at the position its own track reported. The trail behind it is the last three minutes of fixes.");
+      }
+      bestDist = dist;
+    }
+
+    return best;
+  }
+
+  private backingOf(key: string | null): ReturnType<Ledger["get"]> {
+    return key === null ? undefined : this.ledger.get(key);
+  }
+
+  private hitOf(
+    event: SkyEvent | null,
+    visitor: Presence | null,
+    altRad: number,
+    azRad: number,
+    distancePx: number,
+    x: number,
+    y: number,
+    cx: number,
+    cy: number,
+    encoding: string,
+  ): Hit {
+    return {
+      kind: visitor ? "visitor" : (event?.kind ?? "edit"),
+      event,
+      visitor,
+      altDeg: altRad * RAD,
+      azDeg: azRad * RAD,
+      x: cx + x,
+      y: cy - y,
+      distancePx,
+      encoding,
+      inferredPlacement: event?.placement === "regional",
+    };
+  }
+}
+
+function distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-9) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function writeDisc(
+  into: Float32Array,
+  at: number,
+  d: {
+    a: number;
+    b: number;
+    from: number;
+    to: number;
+    startSec: number;
+    durSec: number;
+    sizeDeg: number;
+    soften: number;
+    driftPx: number;
+    horizontalSpace: boolean;
+    colour: RGB;
+    seed: number;
+  },
+): void {
+  into[at] = d.a;
+  into[at + 1] = d.b;
+  into[at + 2] = d.from;
+  into[at + 3] = d.to;
+  into[at + 4] = d.startSec;
+  into[at + 5] = d.durSec;
+  into[at + 6] = d.sizeDeg;
+  into[at + 7] = d.soften;
+  into[at + 8] = d.driftPx;
+  into[at + 9] = d.horizontalSpace ? 1 : 0;
+  into[at + 10] = d.colour[0];
+  into[at + 11] = d.colour[1];
+  into[at + 12] = d.colour[2];
+  into[at + 13] = d.seed;
+}
+
+function parseOr(hex: string, fallback: RGB): RGB {
+  return parseColour(hex) ?? fallback;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function smoothstep01(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+export function sceneOptions(
+  partial: Partial<SceneOptions> & { palette: SkyPalette },
+): SceneOptions {
+  return {
+    observer: { latDeg: 51.4769, lonDeg: -0.0005, gazeAzDeg: 180, gazeAltDeg: 90 },
+    fovDeg: 180,
+    reducedMotion: false,
+    showSelf: true,
+    resolveAccent: null,
+    capacity: DEFAULT_CAPACITY,
+    epochMs: Date.now(),
+    ...partial,
+  };
+}
+
+export type { PaletteSource, SkyPalette, Audit, DrawReport, SkyEvent, Presence };

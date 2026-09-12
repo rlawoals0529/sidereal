@@ -178,24 +178,37 @@ export const KASTEN_YOUNG_A = 0.50572;
 export const KASTEN_YOUNG_B = 6.07995;
 export const KASTEN_YOUNG_C = -1.6364;
 
+export function airmass(altRad: number): number {
+  const deg = altRad * RAD;
+  return 1 / (Math.sin(altRad) + KASTEN_YOUNG_A * Math.pow(deg + KASTEN_YOUNG_B, KASTEN_YOUNG_C));
+}
+
+/**
+ * Normalised against the airmass at the zenith rather than against 1.
+ *
+ * Kasten and Young's fit does not pass through exactly 1.0 at the zenith; it lands at
+ * 0.99971, which leaves the brightest possible light 0.005% over full and the whole sky
+ * very slightly wrong against a palette chosen for a known ground. Dividing out the fit's
+ * own zenith value makes the top of the sky exactly 1 and costs one constant fold.
+ */
 export function extinction(altRad: number): number {
   if (altRad <= 0) return 0;
-  const deg = altRad * RAD;
-  const airmass =
-    1 /
-    (Math.sin(altRad) + KASTEN_YOUNG_A * Math.pow(deg + KASTEN_YOUNG_B, KASTEN_YOUNG_C));
-  // Normalised so the zenith is exactly 1. Without this the whole sky is 17% dark and the
-  // palette, which was chosen against a known ground, quietly stops matching it.
-  return Math.pow(10, -0.4 * EXTINCTION_K * (airmass - 1));
+  return Math.pow(10, -0.4 * EXTINCTION_K * (airmass(altRad) - airmass(Math.PI / 2)));
 }
 
 /**
  * Where the observer is standing and which way they are looking.
  *
- * `gazeAz`/`gazeAlt` default to straight up elsewhere. Looking up is the whole posture of the
- * thing, and a zenith-centred view puts the horizon on screen as a complete circle, which is
- * the one composition where "below the horizon" is visible as a boundary rather than
+ * `gazeAz`/`gazeAlt` default to straight up, facing south. Looking up is the whole posture of
+ * the thing, and a zenith-centred view puts the horizon on screen as a complete circle, which
+ * is the one composition where "below the horizon" is visible as a boundary rather than
  * inferred from things vanishing off an edge.
+ *
+ * **Why south and not north.** Screen-up is whatever is behind you when you tilt your head
+ * back, which is the physical truth and is also why a naive default of "facing north" puts
+ * north at the bottom of the frame. Facing south puts north at the top and east on the left,
+ * which is the orientation every all-sky photograph and planisphere uses. It is a roll, not a
+ * flip: nothing is mirrored, the observer is simply facing the other way.
  */
 export type Observer = {
   latDeg: number;

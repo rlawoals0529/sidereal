@@ -46,18 +46,24 @@ export type LayerStats = {
 };
 
 abstract class BaseLayer {
+  readonly name: string;
+  readonly capacity: number;
+  readonly stride: number;
   readonly data: Float32Array;
+  protected readonly ledger: Ledger;
   protected readonly keys: (string | null)[];
   protected dirtyLo = Number.POSITIVE_INFINITY;
   protected dirtyHi = Number.NEGATIVE_INFINITY;
   dropped = 0;
 
-  constructor(
-    readonly name: string,
-    readonly capacity: number,
-    readonly stride: number,
-    protected readonly ledger: Ledger,
-  ) {
+  // Fields are assigned rather than declared in the parameter list. Parameter properties are
+  // one of the three things node's type stripping cannot erase, and the benchmark runs under
+  // it; see DEPS.md.
+  constructor(name: string, capacity: number, stride: number, ledger: Ledger) {
+    this.name = name;
+    this.capacity = capacity;
+    this.stride = stride;
+    this.ledger = ledger;
     this.data = new Float32Array(capacity * stride);
     this.keys = new Array<string | null>(capacity).fill(null);
   }
@@ -123,7 +129,21 @@ export class FifoLayer extends BaseLayer {
     this.count++;
   }
 
-  /** Advance the tail past everything that has outlived `lifeMs`. */
+  /**
+   * Advance the tail past everything that has outlived `lifeMs`.
+   *
+   * The scan stops at the first slot that is still alive, which is what makes retiring cost
+   * the number of things that expired rather than the number of things on the sky. The price
+   * is that it is a scan of a queue ordered by *arrival*, not by event time: a batch that
+   * happens to carry its newest event first pins everything behind it until that one expires.
+   *
+   * That is a stall, not a leak, and it is worth knowing it is deliberate. Nothing becomes
+   * visible that should not be, because the shader decides visibility from the event's own
+   * timestamp and discards a stalled slot; the only cost is that the slot is not reused yet,
+   * and it frees itself the moment the blocker ages out. Walking the whole ring to find every
+   * expired slot would turn an O(expired) step into an O(live) one on every frame, which is
+   * the trade this deliberately does not make.
+   */
   retire(nowMs: number, lifeMs: number): void {
     while (this.count > 0 && this.born[this.tail]! + lifeMs < nowMs) {
       this.forgetSlot(this.tail);
@@ -200,6 +220,11 @@ export class SlotLayer extends BaseLayer {
     write(this.data, slot * this.stride, slot);
     this.touch(slot);
     return slot;
+  }
+
+  /** Mark a slot changed after writing into `data` directly, as a recolour does. */
+  touchSlot(slot: number): void {
+    this.touch(slot);
   }
 
   slotFor(key: string): number | undefined {

@@ -30,6 +30,16 @@ WebGL2 has been available in every current browser since Safari 15 (2021). A mac
 it gets the still composition on a 2D context, which is the same thing
 `prefers-reduced-motion` gets, so that path is exercised rather than theoretical.
 
+**Having WebGL2 is not the same as having a GPU, and that gap is handled by measurement.**
+A software implementation reports itself as WebGL2, links every shader and draws every frame;
+under Chrome's SwiftShader this renderer was measured at **10fps** on a 1440x900 canvas with
+3095 lights, which is fill rate and not a bug, and nothing about the context says so in
+advance. Sniffing the renderer string for "SwiftShader" would also miss every slow real GPU,
+so instead the sky watches the frame rate it is actually delivering and collapses to the
+still composition when the median interval goes past 40ms. `stats().frame.degradedAtMs`
+carries the number that made it decide, so the reason is a measurement rather than a
+guess.
+
 ## Dev-time
 
 `test/sky/bench.ts` runs under `node --experimental-strip-types`, which is why nothing in

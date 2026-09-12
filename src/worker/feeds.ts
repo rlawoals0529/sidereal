@@ -77,6 +77,16 @@
  * seconds is the longest a broken sky should stay broken.
  */
 import type { SkyEvent } from "../shared/event.ts";
+import {
+  fetchAurora,
+  fetchIss,
+  fetchQuakes,
+  normalizeAuroraEvents,
+  normalizeIssEvents,
+  normalizeQuakeEvents,
+  normalizeWikiEvents,
+  streamWikiChunks,
+} from "../feeds/index.ts";
 
 /**
  * One polled source.
@@ -97,31 +107,70 @@ export type PolledFeed = {
  * Where the pollers get registered. This is the only file in `src/worker/` that has to
  * change to put a feed on the clock.
  *
- * Empty is a working state, not a stub. An empty registry makes the alarm a no-op costing
- * one storage write per fire, and `/ingest` still works, so a feeds slice that would
- * rather run its own schedule somewhere else can ignore this array entirely. Both paths
- * land in the same `SkyRoom.ingest`, which is where all the validation is.
+ * A registry entry is one line plus a normalizer that already exists. Both this path and the
+ * `/ingest` route land in the same `SkyRoom.ingest`, which is where all the validation is, so
+ * a feed can be moved off this clock and onto an external scheduler without changing the room.
  *
- * It is left empty deliberately rather than wired to `src/feeds/` as that slice lands.
- * Wiring is a cross-slice decision and belongs in a change that can be reviewed as one,
- * not a speculative import added by whichever slice finished second. What the wiring looks
- * like against the surface `src/feeds/index.ts` actually exposes:
+ * The cadences below are each set by the source, not by what would look best. Polling faster
+ * than a source updates spends requests to receive the same bytes again.
  *
- *     import { fetchQuakes, normalizeQuakeEvents } from "../feeds/index.ts";
- *
- *     const quakes: PolledFeed = {
- *       id: "quake",
- *       everyMs: 60_000,
- *       poll: async () => normalizeQuakeEvents(await fetchQuakes()),
- *     };
- *
- * The ISS and the aurora are the same shape with different cadences. Wikipedia is the one
- * that is not, and `streamWikiChunks(signal)` is already the right shape for it: open the
- * stream, read whole lines until a short deadline, abort the signal, hand what arrived to
- * `normalizeWikiEvents`. A sip with a deadline and an abort, not a connection that is kept.
- * The reasoning for that is at the top of this file.
+ * | feed   | every | why |
+ * |--------|-------|-----|
+ * | wiki   | 5 s   | every alarm, a fresh sip of the firehose |
+ * | iss    | 5 s   | the station covers 38 km in that time, which is a visible step on a track |
+ * | quake  | 60 s  | the USGS hourly summary is regenerated about once a minute |
+ * | aurora | 300 s | OVATION publishes roughly every five minutes |
  */
-export const POLLED_FEEDS: PolledFeed[] = [];
+export const POLLED_FEEDS: PolledFeed[] = [
+  { id: "wiki", everyMs: 5_000, poll: async () => normalizeWikiEvents(await sipWiki()) },
+  { id: "iss", everyMs: 5_000, poll: async () => normalizeIssEvents(await fetchIss()) },
+  { id: "quake", everyMs: 60_000, poll: async () => normalizeQuakeEvents(await fetchQuakes()) },
+  { id: "aurora", everyMs: 300_000, poll: async () => normalizeAuroraEvents(await fetchAurora()) },
+];
+
+/** How long a sip reads for. Short, because the alarm is every 5 s and this is not the only
+ *  feed on it. At around 100 edits a second this still returns a few hundred records. */
+const WIKI_SIP_MS = 800;
+
+/** A ceiling on what one sip may hold, so an unusually fast window cannot grow without bound.
+ *  A record is roughly 1 kB, so this is a few thousand of them. */
+const WIKI_SIP_BYTES = 3_000_000;
+
+/**
+ * Read a window of the Wikipedia firehose, then let go of it.
+ *
+ * This is the shape the cron-versus-stream argument at the top of this file arrives at: open,
+ * read until a deadline, abort, hand over what arrived. Nothing is kept between runs, so there
+ * is no connection to repair and no watchdog timer to pin the object.
+ *
+ * **An abort is the normal ending, not a failure.** It surfaces as a thrown error out of the
+ * iterator, so the catch below is the success path and the text already collected still counts.
+ * The wiki normalizer skips a truncated final frame, which is exactly what cutting a stream
+ * mid-record leaves behind.
+ *
+ * **A real failure must still look like one.** If nothing at all was read and the error was not
+ * our own abort, this rethrows, so the scheduler keeps the old due-time and retries rather than
+ * recording a successful poll. A dead feed that reports success is a feed that looks alive and
+ * produces nothing, which is the failure this whole file is arranged to avoid.
+ */
+export async function sipWiki(): Promise<string> {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), WIKI_SIP_MS);
+  let text = "";
+  try {
+    for await (const chunk of streamWikiChunks(stop.signal)) {
+      text += chunk;
+      if (text.length >= WIKI_SIP_BYTES || stop.signal.aborted) break;
+    }
+  } catch (error) {
+    if (text.length === 0 && !stop.signal.aborted) throw error;
+  } finally {
+    clearTimeout(timer);
+    stop.abort();
+  }
+  return text;
+}
+
 
 export type DueState = Record<string, number>;
 

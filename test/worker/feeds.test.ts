@@ -8,7 +8,8 @@
  * nothing, which is the one failure nobody would notice.
  */
 import { describe, expect, it, vi } from "vitest";
-import { POLLED_FEEDS, runDueFeeds, type PolledFeed } from "../../src/worker/feeds.ts";
+import { AURORA_PER_POLL, AURORA_REFRESH_MS, POLLED_FEEDS, runDueFeeds, type PolledFeed } from "../../src/worker/feeds.ts";
+import { QUEUE_CAP } from "../../src/worker/limits.ts";
 import type { SkyEvent } from "../../src/shared/event.ts";
 
 const T = Date.UTC(2024, 5, 15, 3, 0, 0);
@@ -47,14 +48,22 @@ describe("the registry", () => {
     expect(POLLED_FEEDS.map((f) => f.id).sort()).toEqual(["aurora", "iss", "quake", "wiki"]);
   });
 
-  it("polls nothing faster than its source publishes", () => {
-    // Each of these is set by the upstream cadence. Polling faster spends a request to receive
-    // the same bytes again, and these are four services nobody is paying us to run.
+  it("does not hit any source faster than it publishes", () => {
+    // Poll cadence is not the same thing as fetch cadence any more. The aurora is polled every
+    // alarm because a refresh is handed over in slices, and the network call behind it still
+    // happens once every five minutes. Asserting the poll interval would have been asserting
+    // the wrong number, which is how this test read before the slicing landed.
     const every = Object.fromEntries(POLLED_FEEDS.map((f) => [f.id, f.everyMs]));
     expect(every.quake).toBeGreaterThanOrEqual(60_000);
-    expect(every.aurora).toBeGreaterThanOrEqual(300_000);
-    expect(every.wiki).toBeGreaterThanOrEqual(5_000);
+    expect(AURORA_REFRESH_MS).toBeGreaterThanOrEqual(300_000);
     expect(every.iss).toBeGreaterThanOrEqual(5_000);
+    expect(every.wiki).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("hands the aurora over in slices small enough not to evict the other feeds", () => {
+    // 873 cells against a 512 queue evicted 386 events and starved every other feed. The
+    // number that matters is this one staying well under QUEUE_CAP with room for the rest.
+    expect(AURORA_PER_POLL).toBeLessThan(QUEUE_CAP / 4);
   });
 });
 

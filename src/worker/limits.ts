@@ -110,7 +110,22 @@ export const MAX_INGEST_BATCH = 256;
 /** Field caps on ingested events. `label` and `source` are strings from the open internet
  *  by way of a normalizer; they are the allocation vector on the ingest path. */
 export const MAX_LABEL_CHARS = 200;
-export const MAX_SOURCE_CHARS = 64;
+
+/**
+ * `source` is the evidence line, so it is long on purpose.
+ *
+ * This was 64, which looked like a sensible cap for a feed name and was not one. `source` is
+ * where a normalizer puts what a reader needs in order to judge the light: which feed said so,
+ * that a Wikipedia edit is placed at its wiki's region and not its editor's, that an aurora
+ * cell is a forecast for one time observed at another. Those run to 140 characters and they
+ * should. At 64 the room rejected every wiki, aurora and ISS event ever sent to it and kept
+ * only earthquakes, so the sky rendered exactly one of its four feeds and nothing said a word.
+ *
+ * 256 is chosen against the longest real source plus room to explain a fifth feed. It is still
+ * a cap, and it is still checked, because an unbounded string on the ingest path is an
+ * unbounded allocation whatever it is carrying.
+ */
+export const MAX_SOURCE_CHARS = 256;
 export const MAX_ID_CHARS = 128;
 
 /**

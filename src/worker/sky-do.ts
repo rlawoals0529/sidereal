@@ -25,7 +25,7 @@
  */
 import { SkyRoom, type Attachment, type SkyClient } from "./room.ts";
 import { POLLED_FEEDS, runDueFeeds, type DueState } from "./feeds.ts";
-import { PING, PONG, POLL_ALARM_MS } from "./limits.ts";
+import { MAX_INGEST_BATCH, PING, PONG, POLL_ALARM_MS } from "./limits.ts";
 
 export type Env = {
   SKY: DurableObjectNamespace;
@@ -162,7 +162,17 @@ export class Sky {
     const lastRun = (await this.#state.storage.get<DueState>(DUE_STATE_KEY)) ?? {};
     const result = await runDueFeeds(POLLED_FEEDS, lastRun, now);
 
-    if (result.events.length > 0) this.#room.ingest(result.events);
+    // Chunked to the ingest cap rather than handed over whole.
+    //
+    // `MAX_INGEST_BATCH` exists to bound one untrusted request, and applying it to our own
+    // poller made it delete data instead. A single OVATION refresh is around 830 cells, so a
+    // whole-batch call kept 256 and truncated the rest: the auroral band drew about a third of
+    // itself, quietly, and the only trace was a counter nobody was reading. The cap still
+    // bounds every allocation because each call is still capped. It just no longer decides
+    // what the sky contains.
+    for (let i = 0; i < result.events.length; i += MAX_INGEST_BATCH) {
+      this.#room.ingest(result.events.slice(i, i + MAX_INGEST_BATCH));
+    }
     if (result.failures.length > 0) {
       console.warn(`sidereal: feed poll failed: ${result.failures.join(", ")}`);
     }

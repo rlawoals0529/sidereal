@@ -104,6 +104,74 @@ export type PolledFeed = {
 };
 
 /**
+ * The budget for one sip, and why it is mostly not spent reading.
+ *
+ * Measured against the live endpoint rather than assumed, because the first attempt at this
+ * number was assumed and was wrong in both directions:
+ *
+ *   time to first byte   about 590 ms, every time. DNS, TLS and the first frame.
+ *   useful yield         about 4 events per second of actual reading
+ *
+ * The yield is low because most of the firehose is not a meteor. Bots are filtered, and
+ * `commons.wikimedia.org` and `wikidata.org` are multilingual with no primary region so they
+ * are dropped rather than placed somewhere invented. Roughly 49 kB of stream produced four
+ * drawable edits.
+ *
+ * So the budget is dominated by the handshake, and anything under about 700 ms returns
+ * literally nothing: an earlier tuning to 180 ms aborted before the first byte arrived and took
+ * the whole feed to zero while every test stayed green. 2000 ms leaves around 1.4 seconds of
+ * reading, for about six edits a sip.
+ *
+ * That is a sparse sky on purpose. Four feeds arriving all at once is a smear, and the brief
+ * for this thing was that when something happens it should mean something.
+ */
+const WIKI_SIP_MS = 2_000;
+
+/**
+ * And the sip runs every ten seconds rather than every alarm.
+ *
+ * Paying 590 ms of handshake every five seconds to collect four events is most of the cost
+ * going to the connection rather than the data. At ten seconds the object is held for 2 s in
+ * every 10, which is a fifth of its waking time, and it only runs at all while somebody is
+ * here.
+ */
+const WIKI_EVERY_MS = 10_000;
+
+/**
+ * The aurora arrives as a whole globe and is handed over a slice at a time.
+ *
+ * One OVATION refresh is about 873 cells. Pushed in one go they overran the 512-deep queue and
+ * evicted 386 events, and because the queue is one FIFO shared by four feeds, the ones evicted
+ * were the earthquakes and edits that happened to be in front of them. A live run produced 512
+ * aurora cells and not a single quake.
+ *
+ * The queue cap is not wrong, it is reasoned about meteors: past five seconds a meteor is a
+ * claim about a "now" that has gone. An aurora cell is a five minute forecast and a quake ring
+ * lives for six minutes, so the one time constant does not fit all four feeds. Rather than
+ * loosen a bound that is correct for the fast feed, the slow feed stops arriving in a lump.
+ *
+ * At 96 a poll and one poll per alarm, a refresh takes about 45 seconds to lay the band down,
+ * then nothing for the rest of the five minutes. A band that fills in over half a minute is a
+ * fair picture of something that changes over tens of minutes, and each cell is idempotent, so
+ * a cell that arrives late simply updates its own light rather than adding a second one.
+ *
+ * The buffer is module state, which a hibernating object may or may not keep. Losing it costs
+ * one extra fetch and nothing else, which is why it is allowed to be module state.
+ */
+export const AURORA_PER_POLL = 96;
+export const AURORA_REFRESH_MS = 300_000;
+let auroraQueue: SkyEvent[] = [];
+let auroraFetchedAt = 0;
+
+async function nextAuroraSlice(now: number): Promise<SkyEvent[]> {
+  if (auroraQueue.length === 0 && now - auroraFetchedAt >= AURORA_REFRESH_MS) {
+    auroraQueue = normalizeAuroraEvents(await fetchAurora());
+    auroraFetchedAt = now;
+  }
+  return auroraQueue.splice(0, AURORA_PER_POLL);
+}
+
+/**
  * Where the pollers get registered. This is the only file in `src/worker/` that has to
  * change to put a feed on the clock.
  *
@@ -116,31 +184,18 @@ export type PolledFeed = {
  *
  * | feed   | every | why |
  * |--------|-------|-----|
- * | wiki   | 5 s   | every alarm, a fresh sip of the firehose |
+ * | wiki   | 10 s  | a fresh sip; most of the budget is the handshake, see WIKI_SIP_MS |
  * | iss    | 5 s   | the station covers 38 km in that time, which is a visible step on a track |
  * | quake  | 60 s  | the USGS hourly summary is regenerated about once a minute |
- * | aurora | 300 s | OVATION publishes roughly every five minutes |
+ * | aurora | 5 s   | a slice of the last refresh; the refresh itself is every 300 s |
  */
 export const POLLED_FEEDS: PolledFeed[] = [
-  { id: "wiki", everyMs: 5_000, poll: async () => normalizeWikiEvents(await sipWiki()) },
+  { id: "wiki", everyMs: WIKI_EVERY_MS, poll: async () => normalizeWikiEvents(await sipWiki()) },
   { id: "iss", everyMs: 5_000, poll: async () => normalizeIssEvents(await fetchIss()) },
   { id: "quake", everyMs: 60_000, poll: async () => normalizeQuakeEvents(await fetchQuakes()) },
-  { id: "aurora", everyMs: 300_000, poll: async () => normalizeAuroraEvents(await fetchAurora()) },
+  { id: "aurora", everyMs: 5_000, poll: (now) => nextAuroraSlice(now) },
 ];
 
-/**
- * How long a sip reads for, set from a measurement rather than a guess.
- *
- * A live run at 800 ms returned about 1,136 non-bot records, so the firehose is running near
- * 1,400 a second, well above the ~100 a second the rate is usually quoted at. The room takes
- * `MAX_INGEST_BATCH` of 256 per call, so 800 ms meant fetching, decoding and normalizing about
- * 1,100 records in order to throw 880 of them away. Paying to transport what you are about to
- * discard is the exact thing the sip design was supposed to avoid.
- *
- * 180 ms lands near the cap instead. Overshoot is still expected, because the rate moves with
- * the time of day, and it is now visible in its own counter rather than summed into rejections.
- */
-const WIKI_SIP_MS = 180;
 
 /** A ceiling on what one sip may hold, so an unusually fast window cannot grow without bound.
  *  A record is roughly 1 kB, so this is a few thousand of them. */

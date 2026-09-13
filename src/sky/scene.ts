@@ -55,12 +55,15 @@ import { CatalogueLayer, FifoLayer, PathLayer, SlotLayer, type LayerStats } from
 import { parseColour, type PaletteSource, type RGB, type SkyPalette } from "./palette.ts";
 import { Ledger, audit, type Audit, type Auditable, type DrawReport } from "./provenance.ts";
 import {
-  STAR_SIZE_MAX_PX,
+  GLARE_MAX_PX,
   brightnessOf,
   catalogue,
   describeStar,
+  glareOf,
+  glareRadius,
   kelvinOf,
   sizeOf,
+  spikeOf,
   starColour,
   type Star,
 } from "./stars.ts";
@@ -72,7 +75,19 @@ export const STREAK_STRIDE = 4;
 export const RING_STRIDE = 4;
 export const DISC_STRIDE = 14;
 export const ARC_STRIDE = 6;
-export const STAR_STRIDE = 8;
+/**
+ * Eleven floats a star, and the order matters twice.
+ *
+ * `renderer.ts` wires attributes against these offsets and `still2d.ts` indexes them by hand,
+ * so a field that moves and is only updated in one of the three draws the wrong number and
+ * still looks plausible. `test/sky/stars.test.ts` pins the layout for that reason.
+ *
+ *   0 declination, 1 right ascension, radians
+ *   2 core diameter px, 3 core alpha
+ *   4 quad diameter px, 5 glare peak, 6 spike peak
+ *   7 8 9 colour, 10 shimmer seed
+ */
+export const STAR_STRIDE = 11;
 
 /** Offsets of the one field in each layout that a clock rebase has to shift. */
 const STREAK_TIME = 2;
@@ -671,16 +686,26 @@ export class Scene {
 
   private writeStar(into: Float32Array, at: number, star: Star): void {
     const colour = starColour(star.mag, star.ci, this.opts.palette.star);
+    const core = sizeOf(star.mag);
+    const glare = glareOf(star.mag);
+    const spike = spikeOf(star.mag);
+    // The quad has to hold whatever is drawn in it. For the 8,484 stars with no skirt that is
+    // the core and nothing else, which is why adding glare did not make the sky more expensive
+    // to draw: the fragments go where the light is.
+    const reach = Math.max(core / 2, glareRadius(glare + spike));
     into[at] = star.decRad;
     into[at + 1] = star.raRad;
-    into[at + 2] = sizeOf(star.mag) * this.dpr;
+    into[at + 2] = core * this.dpr;
     into[at + 3] = brightnessOf(star.mag);
-    into[at + 4] = colour[0];
-    into[at + 5] = colour[1];
-    into[at + 6] = colour[2];
+    into[at + 4] = reach * 2 * this.dpr;
+    into[at + 5] = glare;
+    into[at + 6] = spike;
+    into[at + 7] = colour[0];
+    into[at + 8] = colour[1];
+    into[at + 9] = colour[2];
     // Off the catalogue index, so a star shimmers the same way across a reload and no two
     // neighbours shimmer together.
-    into[at + 7] = seedOf(`star:${star.index}`);
+    into[at + 10] = seedOf(`star:${star.index}`);
   }
 
   private repaintStars(): void {
@@ -863,8 +888,10 @@ export class Scene {
     const data = this.stars.data;
 
     // A cheap rejection bound before any square root: the furthest a cursor can be from a
-    // star's centre and still touch it is the biggest drawn radius plus the slop.
-    const reach = STAR_SIZE_MAX_PX / 2 + STAR_HIT_SLOP_CSS;
+    // star's centre and still touch it is the biggest drawn radius plus the slop. That is the
+    // glare cap rather than the core, because a star with a halo is genuinely that wide on the
+    // page and pointing at the middle of Sirius's blaze should find Sirius.
+    const reach = GLARE_MAX_PX + STAR_HIT_SLOP_CSS;
     const reach2 = reach * reach;
 
     let bestScore = STAR_HIT_SLOP_CSS;
@@ -888,7 +915,9 @@ export class Scene {
       if (d2 > reach2) continue;
 
       const dist = Math.sqrt(d2);
-      // The drawn diameter is in device pixels, and everything here is in CSS pixels.
+      // Scored against the CORE rather than the quad. The quad holds the glare skirt, which is
+      // light the star put on the page but is not the star: a cursor twenty pixels off Sirius
+      // is inside its halo and is not pointing at it. Device pixels to CSS pixels on the way.
       const score = dist - data[i * STAR_STRIDE + 2]! / (2 * this.dpr);
       if (score >= bestScore) continue;
       bestScore = score;

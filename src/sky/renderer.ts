@@ -45,8 +45,9 @@ const DISC_ATTRIBS: AttribSpec[] = [
 const STAR_ATTRIBS: AttribSpec[] = [
   { name: "aEq", size: 2, offsetFloats: 0 },
   { name: "aPoint", size: 2, offsetFloats: 2 },
-  { name: "aColor", size: 3, offsetFloats: 4 },
-  { name: "aSeed", size: 1, offsetFloats: 7 },
+  { name: "aGlare", size: 3, offsetFloats: 4 },
+  { name: "aColor", size: 3, offsetFloats: 7 },
+  { name: "aSeed", size: 1, offsetFloats: 10 },
 ];
 const ARC_ATTRIBS: AttribSpec[] = [
   { name: "aA", size: 2, offsetFloats: 0 },

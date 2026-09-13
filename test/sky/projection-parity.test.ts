@@ -70,7 +70,12 @@ const EXPECTED: Record<string, number> = {
   METEOR_MAX_DEG: constants.METEOR_MAX_DEG,
   STAR_TWINKLE: constants.STAR_TWINKLE,
   STAR_TWINKLE_RATE: constants.STAR_TWINKLE_RATE,
+  STAR_TWINKLE_AIRMASS_EXP: constants.STAR_TWINKLE_AIRMASS_EXP,
+  STAR_TWINKLE_MAX: constants.STAR_TWINKLE_MAX,
   STAR_CORE: constants.STAR_CORE,
+  GLARE_R0_PX: constants.GLARE_R0_PX,
+  SPIKE_ARMS: constants.SPIKE_ARMS,
+  SPIKE_SHARP: constants.SPIKE_SHARP,
 };
 
 function shaderConstants(src: string): Map<string, number> {

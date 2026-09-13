@@ -33,6 +33,7 @@ import {
   METEOR_MAX_DEG,
   METEOR_MIN_DEG,
   QUAKE_LIFE_S,
+  GLARE_R0_PX,
   RAYLEIGH_KM_S,
   SPREAD_R0,
   STAR_CORE,
@@ -44,6 +45,12 @@ import { catalogue } from "./stars.ts";
 function css(c: RGB, a: number): string {
   const to255 = (v: number): number => Math.round(Math.max(0, Math.min(1, v)) * 255);
   return `rgba(${to255(c[0])},${to255(c[1])},${to255(c[2])},${Math.max(0, Math.min(1, a)).toFixed(3)})`;
+}
+
+/** `smoothstep` with the edges the shader's own call uses, so the two taper the same way. */
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
 }
 
 export function drawStill(ctx: CanvasRenderingContext2D, scene: Scene): void {
@@ -81,10 +88,16 @@ export function drawStill(ctx: CanvasRenderingContext2D, scene: Scene): void {
   // in a still. A radial gradient per star is about forty microseconds, which is most of a
   // second for the catalogue; a `fillRect` is a memory write. At the size a star is drawn, two
   // pixels for almost all of them, the difference between a square and a disc is not visible,
-  // and where it would be - the bright handful above four pixels - the gradient is worth
+  // and where it would be, the few hundred that carry a glare skirt, the gradient is worth
   // paying for and is used.
   //
-  // Same curves as the GL path, off the same instance buffer, so the two are the same sky.
+  // The skirt's shape is the same inverse square the shader draws, sampled at five stops.
+  // The diffraction arms are NOT drawn here: an angular modulation needs a shader or a path per
+  // arm, and this is the fallback for a machine that could not give us a shader at all. The
+  // eleven stars that carry arms still carry their halo, so the composition is the same sky
+  // with one optical detail missing rather than a different one.
+  //
+  // Same curves as the GL path, off the same instance buffer, so the two agree by construction.
   {
     const sinLst = Math.sin(f.lst);
     const cosLst = Math.cos(f.lst);
@@ -100,22 +113,28 @@ export function drawStill(ctx: CanvasRenderingContext2D, scene: Scene): void {
       const y = cy - k * (vec.x * f.up.x + vec.y * f.up.y + vec.z * f.up.z) * s;
       if (x < -8 || y < -8 || x > w + 8 || y > h + 8) continue;
       const o = i * STAR_STRIDE;
-      const size = d[o + 2]!;
-      const alpha = d[o + 3]! * extinction(Math.asin(vec.z));
-      if (alpha <= 0.004) continue;
-      const colour: RGB = [d[o + 4]!, d[o + 5]!, d[o + 6]!];
-      if (size > 4) {
-        const grad = ctx.createRadialGradient(x, y, 0, x, y, size / 2);
-        for (const stop of [0, 0.25, 0.5, 0.75, 1]) {
-          grad.addColorStop(stop, css(colour, alpha * Math.exp(-STAR_CORE * stop * stop)));
+      const core = d[o + 2]!;
+      const quad = d[o + 4]!;
+      const glare = d[o + 5]! + d[o + 6]!;
+      const sky = extinction(Math.asin(vec.z));
+      const alpha = d[o + 3]! * sky;
+      if (alpha <= 0.004 && glare <= 0) continue;
+      const colour: RGB = [d[o + 7]!, d[o + 8]!, d[o + 9]!];
+      if (glare > 0) {
+        const radius = quad / 2;
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        for (const stop of [0, 0.15, 0.3, 0.6, 1]) {
+          const rPx = Math.max(stop * radius, 0.35);
+          const skirt = glare * ((GLARE_R0_PX * GLARE_R0_PX) / (rPx * rPx)) * smoothstep(1, 0.8, stop);
+          grad.addColorStop(stop, css(colour, sky * (alpha * Math.exp(-STAR_CORE * (rPx * rPx) / ((core / 2) ** 2)) + skirt)));
         }
         ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.fill();
       } else {
         ctx.fillStyle = css(colour, alpha);
-        ctx.fillRect(x - size / 2, y - size / 2, size, size);
+        ctx.fillRect(x - core / 2, y - core / 2, core, core);
       }
     }
   }

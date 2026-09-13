@@ -22,9 +22,10 @@ const HERE = { latDeg: 64.84, lonDeg: -147.72, gazeAzDeg: 180, gazeAltDeg: 90 };
 type Call = { op: string; style: string };
 
 /** A 2D context that records the paint it was asked for and draws nothing. */
-function recordingCtx(): { ctx: CanvasRenderingContext2D; calls: Call[]; stops: string[] } {
+function recordingCtx(): { ctx: CanvasRenderingContext2D; calls: Call[]; stops: string[]; gradients: string[][] } {
   const calls: Call[] = [];
   const stops: string[] = [];
+  const gradients: string[][] = [];
   const ctx = {
     fillStyle: "" as unknown,
     strokeStyle: "" as unknown,
@@ -44,10 +45,17 @@ function recordingCtx(): { ctx: CanvasRenderingContext2D; calls: Call[]; stops: 
     stroke() {
       calls.push({ op: "stroke", style: String(ctx.strokeStyle) });
     },
-    createRadialGradient: () => ({ addColorStop: (_o: number, c: string) => stops.push(c) }),
+    // One array per gradient, because the still now draws a gradient per glaring star as well
+    // as one per disc, and "the brightest stop anywhere on the page" stopped being a question
+    // about the aurora the moment there were stars in front of it.
+    createRadialGradient: () => {
+      const own: string[] = [];
+      gradients.push(own);
+      return { addColorStop: (_o: number, c: string) => { own.push(c); stops.push(c); } };
+    },
     createLinearGradient: () => ({ addColorStop: (_o: number, c: string) => stops.push(c) }),
   };
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, calls, stops };
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, calls, stops, gradients };
 }
 
 const alphaOf = (rgba: string): number => Number(/rgba\([^)]*,([\d.]+)\)$/.exec(rgba)?.[1] ?? NaN);
@@ -72,16 +80,19 @@ describe("the still composition", () => {
 
     // A tenth of the way through the crossfade. Reading the target here is the bug.
     scene.update(T + AURORA_FADE_S * 100);
-    const { ctx, stops } = recordingCtx();
+    const { ctx, gradients } = recordingCtx();
     drawStill(ctx, scene);
-    const centre = stops.map(alphaOf).filter((a) => a > 0);
-    expect(Math.max(...centre)).toBeCloseTo(settled * 0.1, 3);
+    // The last radial gradient on the page. Stars are drawn first and discs after them, and
+    // this scene holds exactly one disc.
+    const cell = gradients[gradients.length - 1]!.map(alphaOf).filter((a) => a > 0);
+    expect(Math.max(...cell)).toBeCloseTo(settled * 0.1, 3);
 
     // And once the crossfade is done it is drawing the settled value.
     scene.update(T + AURORA_FADE_S * 1000);
     const late = recordingCtx();
     drawStill(late.ctx, scene);
-    expect(Math.max(...late.stops.map(alphaOf))).toBeCloseTo(settled, 3);
+    const lateCell = late.gradients[late.gradients.length - 1]!.map(alphaOf);
+    expect(Math.max(...lateCell)).toBeCloseTo(settled, 3);
   });
 
   it("puts every kind on the page, so the still is a sky rather than a leftover", () => {

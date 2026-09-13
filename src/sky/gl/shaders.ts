@@ -285,52 +285,101 @@ void main() {
  */
 export const STAR_VERT = vertexSource(`
 in vec2 aEq;      // declination and right ascension, radians, J2000
-in vec2 aPoint;   // drawn diameter in device px, brightness 0..1
+in vec2 aPoint;   // core diameter in device px, core alpha 0..1
+in vec3 aGlare;   // quad diameter in device px, glare peak, spike peak
 in vec3 aColor;
 in float aSeed;   // 0..1, from the catalogue index, so no two stars shimmer in step
 
 out vec2 vUv;
 out vec3 vColor;
-out float vAlpha;
+out float vCorePx;   // core radius, device px
+out float vHalfPx;   // quad radius, device px, which is what vUv is measured against
+out float vCore;     // the core's own alpha
+out vec2 vSkirt;     // glare peak, spike peak
+out float vSky;      // everything the atmosphere does: extinction times scintillation
 
-const float STAR_TWINKLE = 0.16;
+const float STAR_TWINKLE = 0.055;
+const float STAR_TWINKLE_AIRMASS_EXP = 1.75;
+const float STAR_TWINKLE_MAX = 0.55;
 const float STAR_TWINKLE_RATE = 2.6;
 
 void main() {
   vec2 h = skyHorizontal(aEq.x, aEq.y, uLst);
   vec4 p = skyProject(skyLocal(h));
   float ext = skyExtinction(h.x);
-  if (p.z < 0.5 || ext <= 0.0) { gl_Position = skyDiscard(); vAlpha = 0.0; return; }
+  if (p.z < 0.5 || ext <= 0.0) { gl_Position = skyDiscard(); vSky = 0.0; return; }
 
-  // Scintillation. A star is a point source, so the whole of it moves with one pocket of air
-  // and the brightness wanders; the amplitude follows airmass because that dependence is real,
-  // which is why the stars near the horizon flicker and the ones overhead barely do. Clamped
-  // at three airmasses, where extinction has already taken most of the light anyway. Zero when
-  // motion is reduced, like everything else that moves.
+  // Scintillation, and the airmass it follows is a measurement rather than a ramp. A star is a
+  // point source, so the whole of it is displaced by one pocket of moving air at a time; the
+  // scintillation index goes as the airmass to the power 1.75 (Young 1967), which is why the
+  // low sky flickers hard and the zenith only trembles. The airmass here is skyAirmass, the
+  // same Kasten and Young fit the extinction two lines up is using, so the two cannot disagree
+  // about how much air this star is behind. The rate is slowed to something an eye can read and
+  // says so in constants.ts. Zero when motion is reduced, like everything else that moves.
   float live = 1.0 - uFrozen;
-  float shimmer = 1.0 + STAR_TWINKLE * live
-    * clamp(skyAirmass(h.x) - 1.0, 0.0, 3.0)
-    * sin(uNow * STAR_TWINKLE_RATE + aSeed * 6.2832);
+  float amplitude = min(STAR_TWINKLE * pow(skyAirmass(h.x), STAR_TWINKLE_AIRMASS_EXP), STAR_TWINKLE_MAX);
+  float shimmer = 1.0 + amplitude * live * sin(uNow * STAR_TWINKLE_RATE + aSeed * 6.2832);
 
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
-  gl_Position = skyClip(p.xy + corner * (aPoint.x * 0.5));
+  gl_Position = skyClip(p.xy + corner * (aGlare.x * 0.5));
 
   vUv = corner;
   vColor = aColor;
-  vAlpha = aPoint.y * ext * shimmer;
+  vCorePx = max(aPoint.x * 0.5, 0.0001);
+  vHalfPx = max(aGlare.x * 0.5, 0.0001);
+  vCore = aPoint.y;
+  vSkirt = aGlare.yz;
+  vSky = ext * shimmer;
 }
 `);
 
 export const STAR_FRAG = fragmentSource(`
 in vec2 vUv;
 in vec3 vColor;
-in float vAlpha;
+in float vCorePx;
+in float vHalfPx;
+in float vCore;
+in vec2 vSkirt;
+in float vSky;
 
 const float STAR_CORE = 3.6;
+const float GLARE_R0_PX = 3.0;
+const float SPIKE_ARMS = 6.0;
+const float SPIKE_SHARP = 34.0;
 
 void main() {
-  float d2 = dot(vUv, vUv);
-  if (d2 > 1.0) discard;
-  emit(vColor, vAlpha * exp(-STAR_CORE * d2));
+  float d = length(vUv);
+  if (d > 1.0) discard;
+  // Radius in real pixels, because the quad is a different size for every star and a profile
+  // measured against the quad would make a faint star's halo the same shape as Sirius's.
+  float rPx = max(d * vHalfPx, 0.35);
+
+  float core = vCore * exp(-STAR_CORE * (rPx * rPx) / (vCorePx * vCorePx));
+
+  // The glare skirt: what scattering in the air and inside the eye lays around a bright point,
+  // falling off as the inverse square of the angle from it. That is the Stiles and Holladay
+  // term of the CIE disability glare equation, and it is the reason a bright star reads as a
+  // blaze rather than a dot. The peak is set on the CPU from the star's REAL flux, so this
+  // picks out the bright ones by itself and is exactly zero for the 8,484 that cannot carry it.
+  float skirt = 0.0;
+  if (vSkirt.x > 0.0) {
+    float fall = (GLARE_R0_PX * GLARE_R0_PX) / (rPx * rPx);
+    // The arms of the spike, which are the same skirt with the aperture's angular signature on
+    // it. Six, because the eye's own lens sutures are a Y at the front and an inverted Y at the
+    // back, and that grating is why a bright star looks pointed to a person at all. Only the
+    // stars whose skirt is wide enough to resolve an arm carry one; see SPIKE_AT_PX.
+    //
+    // A sine rather than a cosine, which puts an arm straight up instead of straight out to
+    // the side. The sutures are fixed with respect to the head rather than to the sky, so the
+    // pattern is fixed on the screen either way and this is the orientation a person sees.
+    float arms = vSkirt.y > 0.0
+      ? pow(abs(sin(SPIKE_ARMS * 0.5 * atan(vUv.y, vUv.x))), SPIKE_SHARP)
+      : 0.0;
+    // Faded out over the last fifth of the quad. Without it the skirt stops at whatever value
+    // it had reached and leaves a faint disc edge, which is a circle nobody measured.
+    skirt = (vSkirt.x + vSkirt.y * arms) * fall * smoothstep(1.0, 0.8, d);
+  }
+
+  emit(vColor, vSky * (core + skirt));
 }
 `);

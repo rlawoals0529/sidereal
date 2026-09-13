@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEG,
+  airmass,
   equatorialUnit,
   horizontal,
   localFromEquatorialUnit,
@@ -18,13 +19,25 @@ import {
   lmstRad,
   gmstRad,
 } from "../../src/sky/astro.ts";
-import { STAR_CORE, STAR_TWINKLE } from "../../src/sky/constants.ts";
+import {
+  GLARE_R0_PX,
+  SPIKE_ARMS,
+  STAR_CORE,
+  STAR_TWINKLE,
+  STAR_TWINKLE_AIRMASS_EXP,
+  STAR_TWINKLE_MAX,
+} from "../../src/sky/constants.ts";
 import { STAR_STRIDE, Scene, sceneOptions } from "../../src/sky/scene.ts";
 import { CHROME, assertEveryLightIsEarned, backingId } from "../../src/sky/provenance.ts";
 import { Renderer } from "../../src/sky/renderer.ts";
 import { drawStill } from "../../src/sky/still2d.ts";
-import { STAR_VERT } from "../../src/sky/gl/shaders.ts";
+import { STAR_FRAG, STAR_VERT } from "../../src/sky/gl/shaders.ts";
 import {
+  GLARE_FLOOR,
+  GLARE_GAIN,
+  GLARE_MAX_PX,
+  SPIKE_AT_PX,
+  SPIKE_GAIN,
   STAR_COUNT,
   STAR_EXPOSURE,
   STAR_MAG_LIMIT,
@@ -33,8 +46,11 @@ import {
   catalogue,
   describeStar,
   fluxOf,
+  glareOf,
+  glareRadius,
   kelvinOf,
   sizeOf,
+  spikeOf,
   starColour,
   type Star,
 } from "../../src/sky/stars.ts";
@@ -51,6 +67,9 @@ function sky(over: { reducedMotion?: boolean } = {}): Scene {
   scene.update(T);
   return scene;
 }
+
+/** Whitespace-insensitive, so reformatting a shader does not fail a test about its algebra. */
+const squash = (s: string): string => s.replace(/\s+/g, " ");
 
 const byName = (name: string): Star => {
   const star = catalogue().find((s) => s.name === name);
@@ -415,7 +434,7 @@ describe("drawing the catalogue", () => {
     // nine thousand instances or the sky keeps the old page's white.
     const scene = sky();
     const faint = catalogue()[STAR_COUNT - 1]!;
-    const at = faint.index * STAR_STRIDE + 4;
+    const at = faint.index * STAR_STRIDE + 7;
     const before = scene.stars.data[at]!;
     scene.setPalette(paletteFromCss("sakura-lake"));
     expect(scene.stars.data[at]).not.toBeCloseTo(before, 4);
@@ -426,14 +445,18 @@ describe("drawing the catalogue", () => {
     // Not a fade invented to stop things popping in: the star shader calls `skyExtinction`,
     // which is the Kasten and Young airmass the meteors and the rings go through.
     expect(STAR_VERT).toContain("skyExtinction(h.x)");
-    expect(STAR_VERT).toContain("vAlpha = aPoint.y * ext");
+    // Everything the air does rides on one varying, so the core and the glare skirt are dimmed
+    // by the same amount. A skirt that survived extinction would be a halo around a star that
+    // is not there.
+    expect(STAR_VERT).toContain("vSky = ext * shimmer;");
+    expect(STAR_FRAG).toContain("emit(vColor, vSky * (core + skirt));");
   });
 
   it("stops shimmering when motion is reduced", () => {
     // `uFrozen` is the scene's reduced-motion flag, and the amplitude is multiplied by its
     // complement. Without this the still composition is not still.
     expect(STAR_VERT).toContain("float live = 1.0 - uFrozen;");
-    expect(STAR_VERT).toContain("STAR_TWINKLE * live");
+    expect(STAR_VERT).toContain("amplitude * live * sin(");
     expect(STAR_TWINKLE).toBeGreaterThan(0);
     expect(STAR_CORE).toBeGreaterThan(0);
   });
@@ -551,6 +574,26 @@ describe("pointing at a star", () => {
     }
   });
 
+  it("is pointed at by its star and not by its halo", () => {
+    // A cursor twenty pixels off Vega is inside the blaze and is not pointing at Vega. The
+    // grab radius is the CORE plus the slop, never the quad, and the quad is ten times wider
+    // for a star with arms.
+    const scene = sky();
+    const vega = byName("Vega");
+    const at = screenOf(scene, vega);
+    expect(at.alt).toBeGreaterThan(30 * DEG);
+    expect(scene.hitTest(at.x, at.y)?.star?.index).toBe(vega.index);
+
+    const o = vega.index * STAR_STRIDE;
+    const coreRadius = scene.stars.data[o + 2]! / 2;
+    const quadRadius = scene.stars.data[o + 4]! / 2;
+    expect(quadRadius).toBeGreaterThan(coreRadius * 4);
+    // Outside the core and its slop, and still well inside the halo.
+    const away = coreRadius + 8;
+    expect(away).toBeLessThan(quadRadius);
+    expect(scene.hitTest(at.x + away, at.y)?.star?.index).not.toBe(vega.index);
+  });
+
   it("prefers the brighter of two stars the cursor is between", () => {
     // Scored by distance to the drawn EDGE rather than to its centre, so the star you can see
     // wins over the anonymous speck that happens to be a pixel closer to the pointer.
@@ -627,5 +670,236 @@ describe("the one line a panel prints", () => {
     expect(hit?.label).not.toContain("sv_8812");
     // The record is still there for anything that genuinely needs the id.
     expect(hit?.visitor?.id).toBe("sv_8812");
+  });
+});
+
+describe("the glare skirt is the optics of a bright point", () => {
+  it("is driven by real flux and not by the display curve", () => {
+    // The distinction that makes it pick out the bright stars by itself. The display curve puts
+    // the faintest star within a factor of nineteen of the brightest; real flux puts it at one
+    // in fifteen hundred. Driving the skirt off the curve was the first attempt and it gave
+    // every star in the catalogue a halo.
+    const brightest = glareOf(-1.44);
+    const second = glareOf(1.5);
+    expect(brightest / second).toBeCloseTo(fluxOf(-1.44) / fluxOf(1.5), 4);
+    expect(brightest / second).not.toBeCloseTo(brightnessOf(-1.44) / brightnessOf(1.5), 1);
+  });
+
+  it("stops where it would fall under one display step, and that is the only threshold", () => {
+    // No magnitude is written down anywhere. The cut is an inverse square law meeting a display
+    // with 255 levels, and it lands where it lands.
+    for (const mag of [-1.44, 0, 2, 3, 3.8, 3.9, 4, 5, 6.5]) {
+      const wanted = GLARE_GAIN * fluxOf(mag);
+      expect(glareOf(mag) > 0).toBe(wanted > GLARE_FLOOR);
+    }
+    expect(glareOf(3.5)).toBeGreaterThan(0);
+    expect(glareOf(4.5)).toBe(0);
+  });
+
+  it("reaches exactly as far as the inverse square law says", () => {
+    // The radius is solved from the profile rather than chosen: amp * (r0/r)^2 = one step.
+    for (const mag of [0.5, 1, 2, 3]) {
+      const amp = glareOf(mag);
+      const r = glareRadius(amp);
+      expect(r).toBeLessThan(GLARE_MAX_PX);
+      expect(amp * (GLARE_R0_PX / r) ** 2).toBeCloseTo(GLARE_FLOOR, 6);
+    }
+  });
+
+  it("leaves the overwhelming majority of the catalogue without one", () => {
+    const stars = catalogue();
+    const haloed = stars.filter((s) => glareOf(s.mag) > 0);
+    expect(haloed.length).toBeLessThan(stars.length / 12);
+    for (const s of haloed) expect(s.mag).toBeLessThan(4);
+  });
+
+  it("gives a star with no skirt a quad the size of its core and nothing more", () => {
+    // The reason the glare did not make the sky more expensive to draw: the fragments only go
+    // where there is light to put in them.
+    const scene = sky();
+    const faint = catalogue()[STAR_COUNT - 1]!;
+    const o = faint.index * STAR_STRIDE;
+    expect(glareOf(faint.mag)).toBe(0);
+    expect(scene.stars.data[o + 4]).toBeCloseTo(scene.stars.data[o + 2]!, 6);
+    expect(scene.stars.data[o + 5]).toBe(0);
+  });
+
+  it("and gives a bright one a quad wide enough to hold everything it draws", () => {
+    const scene = sky();
+    const sirius = byName("Sirius");
+    const o = sirius.index * STAR_STRIDE;
+    const reach = glareRadius(glareOf(sirius.mag) + spikeOf(sirius.mag));
+    expect(scene.stars.data[o + 4]! / 2).toBeCloseTo(reach, 5);
+    expect(scene.stars.data[o + 4]!).toBeGreaterThan(scene.stars.data[o + 2]! * 4);
+  });
+
+  it("draws the inverse square anchored where the constant says, in real pixels", () => {
+    // The shape is the measurement. A profile measured against the QUAD rather than against
+    // pixels would give a faint star the same halo shape as Sirius, scaled, which is the one
+    // way to get this wrong and still have it look deliberate.
+    expect(squash(STAR_FRAG)).toContain("float rPx = max(d * vHalfPx, 0.35);");
+    expect(squash(STAR_FRAG)).toContain("float fall = (GLARE_R0_PX * GLARE_R0_PX) / (rPx * rPx);");
+  });
+
+  it("fades the skirt out before the quad ends, so no star wears a disc", () => {
+    expect(squash(STAR_FRAG)).toContain("smoothstep(1.0, 0.8, d)");
+  });
+
+  it("is dimmed by the air exactly as the core is", () => {
+    // A halo that survived extinction would be a glow around a star that is not there.
+    expect(squash(STAR_FRAG)).toContain("emit(vColor, vSky * (core + skirt));");
+  });
+});
+
+describe("diffraction arms", () => {
+  it("go on a handful of the brightest and nothing else", () => {
+    const armed = catalogue().filter((s) => spikeOf(s.mag) > 0);
+    expect(armed.length).toBeGreaterThan(4);
+    expect(armed.length).toBeLessThan(20);
+    // Every one of them is a star anybody would name, which is the point of the restriction.
+    for (const s of armed) {
+      expect(s.name).not.toBeNull();
+      expect(s.mag).toBeLessThan(1);
+    }
+    expect(armed.map((s) => s.name)).toContain("Sirius");
+    expect(armed.map((s) => s.name)).toContain("Vega");
+  });
+
+  it("appear on a width rather than on a magnitude", () => {
+    // An arm narrower than a few pixels is a jagged edge and not a spike, so the gate is the
+    // skirt's own width. A magnitude cut would name the same stars today and would stop being
+    // derived the moment any of the numbers around it moved, so the boundary is computed from
+    // the constants and checked either side of itself. It currently falls at 0.4972, and a
+    // hand-written "brighter than half a magnitude" is wrong by three thousandths.
+    const boundaryFlux = (GLARE_FLOOR * (SPIKE_AT_PX / GLARE_R0_PX) ** 2) / GLARE_GAIN;
+    const boundary = -2.5 * Math.log10(boundaryFlux);
+    expect(boundary).toBeGreaterThan(0);
+    expect(spikeOf(boundary - 0.001)).toBeGreaterThan(0);
+    expect(spikeOf(boundary + 0.001)).toBe(0);
+    for (const mag of [-1.44, 0, 0.4, 0.6, 1, 2, 5]) {
+      expect(spikeOf(mag) > 0).toBe(glareRadius(glareOf(mag)) >= SPIKE_AT_PX);
+    }
+  });
+
+  it("are the same skirt with an angular signature on it", () => {
+    // Not a second effect with its own falloff: the arms ride the inverse square, which is why
+    // they reach sqrt(1 + gain) times as far and stop at the same kind of threshold.
+    expect(squash(STAR_FRAG)).toContain("skirt = (vSkirt.x + vSkirt.y * arms) * fall * smoothstep(1.0, 0.8, d);");
+    expect(spikeOf(-1.44)).toBeCloseTo(SPIKE_GAIN * glareOf(-1.44), 6);
+  });
+
+  it("has six of them, because a lens has six suture lines and a spider has four vanes", () => {
+    expect(SPIKE_ARMS).toBe(6);
+    expect(squash(STAR_FRAG)).toContain("pow(abs(sin(SPIKE_ARMS * 0.5 * atan(vUv.y, vUv.x))), SPIKE_SHARP)");
+  });
+});
+
+describe("scintillation follows the airmass", () => {
+  /** The amplitude the shader computes, from the same numbers, so this is the law and not a copy. */
+  const amplitude = (altDeg: number): number =>
+    Math.min(STAR_TWINKLE * Math.pow(airmass(altDeg * DEG), STAR_TWINKLE_AIRMASS_EXP), STAR_TWINKLE_MAX);
+
+  it("uses the published exponent on the same airmass the extinction uses", () => {
+    expect(STAR_TWINKLE_AIRMASS_EXP).toBeCloseTo(1.75, 6);
+    expect(squash(STAR_VERT)).toContain("pow(skyAirmass(h.x), STAR_TWINKLE_AIRMASS_EXP)");
+    // The same fit, not a second one: skyAirmass is what skyExtinction calls two lines above.
+    expect(squash(STAR_VERT)).toContain("float ext = skyExtinction(h.x);");
+  });
+
+  it("is small at the zenith and not zero, which is the correction over the first version", () => {
+    // `airmass - 1` reads nicely and is wrong in the one place it is easiest to check: a star
+    // overhead does twinkle, a little.
+    expect(amplitude(90)).toBeGreaterThan(0.01);
+    expect(amplitude(90)).toBeCloseTo(STAR_TWINKLE, 3);
+  });
+
+  it("grows toward the horizon by the amount the law says", () => {
+    // Two airmasses is thirty degrees up, and 2^1.75 is 3.36.
+    expect(airmass(30 * DEG)).toBeCloseTo(2, 1);
+    expect(amplitude(30) / amplitude(90)).toBeCloseTo(Math.pow(2, 1.75), 1);
+    expect(amplitude(10)).toBeGreaterThan(amplitude(30));
+    expect(amplitude(30)).toBeGreaterThan(amplitude(60));
+    expect(amplitude(60)).toBeGreaterThan(amplitude(90));
+  });
+
+  it("is truncated where the fit runs out rather than letting a star vanish", () => {
+    expect(amplitude(5)).toBe(STAR_TWINKLE_MAX);
+    expect(STAR_TWINKLE_MAX).toBeLessThan(1);
+  });
+});
+
+describe("the still composition carries the optics it can", () => {
+  /** The 2D path, recorded. Mirrors the shape `still.test.ts` uses. */
+  function recordStill(scene: Scene) {
+    const rects: string[] = [];
+    const gradients: string[][] = [];
+    const ctx = {
+      fillStyle: "", strokeStyle: "", lineWidth: 1, globalCompositeOperation: "source-over",
+      setTransform() {}, beginPath() {}, moveTo() {}, lineTo() {}, arc() {}, fill() {}, stroke() {},
+      fillRect() { rects.push(String(ctx.fillStyle)); },
+      createRadialGradient: () => {
+        const own: string[] = [];
+        gradients.push(own);
+        return { addColorStop: (_o: number, c: string) => own.push(c) };
+      },
+      createLinearGradient: () => ({ addColorStop: () => {} }),
+    };
+    drawStill(ctx as unknown as CanvasRenderingContext2D, scene);
+    return { rects, gradients };
+  }
+
+  it("draws every star in a star's colour, which is how a moved offset shows up", () => {
+    // The 2D path reads eleven floats by hand. An offset that slips by one still draws a sky:
+    // it just reads the spike amplitude as a red channel, and the spike amplitude is zero for
+    // all but ten stars. So what is checked is the colour itself. Nothing in the catalogue is
+    // drawn below 195 of 255 in any channel, because a star with no visible hue is the
+    // palette's own white and one with a hue is a blackbody, and neither is dark.
+    const scene = sky({ reducedMotion: true });
+    const { gradients } = recordStill(scene);
+    expect(gradients.length).toBeGreaterThan(40);
+    let dimmest = 255;
+    for (const stops of gradients) {
+      for (const stop of stops) {
+        const m = /rgba\((\d+),(\d+),(\d+)/.exec(stop);
+        expect(m).not.toBeNull();
+        dimmest = Math.min(dimmest, Number(m![1]), Number(m![2]), Number(m![3]));
+      }
+    }
+    expect(dimmest).toBeGreaterThan(150);
+  });
+
+  it("draws a gradient for the glaring stars and a square for the rest", () => {
+    // The fallback for a machine with no WebGL2 has to be the same sky, not a plainer one. The
+    // arms are the one thing it gives up, and it gives them up because an angular modulation
+    // needs a shader; the halo it can do with a radial gradient.
+    const scene = sky({ reducedMotion: true });
+    const { rects, gradients } = recordStill(scene);
+    expect(gradients.length).toBeGreaterThan(40);
+    expect(rects.length).toBeGreaterThan(1000);
+    // Every gradient is a star with a skirt, and there are far fewer of those than of stars.
+    expect(gradients.length).toBeLessThan(rects.length / 4);
+  });
+
+  it("reads the instance layout the GL path writes, field for field", () => {
+    // The 2D path indexes this buffer by hand. When the stride grew from eight to eleven to
+    // make room for the glare, every one of these offsets moved, and an offset updated in the
+    // shader but not here draws the wrong number and still looks like a sky.
+    expect(STAR_STRIDE).toBe(11);
+    const scene = sky();
+    const sirius = byName("Sirius");
+    const o = sirius.index * STAR_STRIDE;
+    const d = scene.stars.data;
+    expect(d[o]).toBeCloseTo(sirius.decRad, 6);
+    expect(d[o + 1]).toBeCloseTo(sirius.raRad, 6);
+    expect(d[o + 2]).toBeCloseTo(sizeOf(sirius.mag), 5);
+    expect(d[o + 3]).toBeCloseTo(brightnessOf(sirius.mag), 6);
+    expect(d[o + 4]).toBeCloseTo(2 * glareRadius(glareOf(sirius.mag) + spikeOf(sirius.mag)), 5);
+    expect(d[o + 5]).toBeCloseTo(glareOf(sirius.mag), 6);
+    expect(d[o + 6]).toBeCloseTo(spikeOf(sirius.mag), 6);
+    const colour = starColour(sirius.mag, sirius.ci, TWILIGHT.star);
+    expect(d[o + 7]).toBeCloseTo(colour[0]!, 6);
+    expect(d[o + 8]).toBeCloseTo(colour[1]!, 6);
+    expect(d[o + 9]).toBeCloseTo(colour[2]!, 6);
+    expect(d[o + 10]).toBeGreaterThan(0);
   });
 });

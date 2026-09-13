@@ -107,22 +107,70 @@ export const AURORA_FADE_S = 40;
 export const STILL_EXPOSURE = 4;
 
 /**
- * How much a star's brightness wanders, and how fast, at one airmass above the zenith value.
+ * How much a star's brightness wanders, and the published law that says where.
  *
- * Scintillation is real and it is the reason stars twinkle and planets do not: a star is a
- * point source, so the whole of it is displaced by the same pocket of moving air at once,
- * where a planet's disc averages many pockets and holds steady. The amplitude genuinely grows
- * with airmass, which is why something low in the sky flickers and the same star overhead
- * barely does, and that dependence is taken from `skyAirmass` rather than invented.
+ * Scintillation is why stars twinkle and planets do not: a star is a point source, so the whole
+ * of it is displaced by one pocket of moving air at a time, where a planet's disc averages many
+ * pockets and holds steady. It is also why this is a naked-eye effect: the amplitude falls off
+ * sharply with aperture, so the same star through a telescope barely moves.
  *
- * The RATE is not real and should not be read as a measurement. Atmospheric scintillation runs
- * at tens of hertz, which on a 60 Hz display is an aliased mess rather than a shimmer, so the
- * frequency here is slowed to something an eye can follow. Radians per second, so 2.6 is about
- * four tenths of a hertz. It is off entirely when motion is reduced, along with everything else
- * that moves.
+ * **The dependence on airmass is a measurement, not a ramp.** The scintillation index goes as
+ * the airmass to the power 1.75 (Young, 1967, *AJ* 72, 747, and the same exponent is in Dravins
+ * et al.'s review). `STAR_TWINKLE` is the amplitude at the ZENITH, where the airmass is one, so
+ * the law gives about three and a half times that at thirty degrees altitude and twenty times it
+ * at ten, which is why the low sky flickers and the top of it barely does. The airmass comes
+ * from `skyAirmass`, the same Kasten and Young fit the extinction uses, so the two cannot
+ * disagree about how much air a star is being seen through.
+ *
+ * The first version of this used `airmass - 1`, which is zero at the zenith. That is the wrong
+ * physics in the one place it is easiest to check: a star overhead does twinkle, a little.
+ *
+ * `STAR_TWINKLE_MAX` is where the law is truncated. Below about ten degrees the published
+ * exponent is fitted outside its range anyway, and a star that vanishes and returns is reading
+ * as a rendering fault rather than as air.
+ *
+ * The RATE is not a measurement and must not be read as one. Real scintillation runs at tens of
+ * hertz, which on a 60 Hz display is aliasing rather than shimmer, so this is slowed to
+ * something an eye can follow. Radians per second, so 2.6 is about four tenths of a hertz. All
+ * of it is off when motion is reduced.
  */
-export const STAR_TWINKLE = 0.16;
+export const STAR_TWINKLE = 0.055;
+export const STAR_TWINKLE_AIRMASS_EXP = 1.75;
+export const STAR_TWINKLE_MAX = 0.55;
 export const STAR_TWINKLE_RATE = 2.6;
+
+/**
+ * Where a star's glare skirt is anchored, in pixels before the device pixel ratio.
+ *
+ * A bright point source does not stop at its core. Light scatters on the way in, in the
+ * atmosphere and again inside the eye, and lays a veil around it that falls off as the inverse
+ * square of the angle from the source. That is the Stiles and Holladay form of the CIE
+ * disability glare equation, and it is the reason a real bright star reads as a blaze rather
+ * than as a dot; a one-pixel point cannot carry it, which is most of why a rendered sky looks
+ * flat.
+ *
+ * This constant is the radius the inverse square law is quoted AT, so the profile is
+ * `amplitude * (r0 / r)^2`. Both halves need it: the shader to draw the falloff, and `stars.ts`
+ * to work out how far out the skirt is still above one display step, which is where the quad
+ * has to end.
+ */
+export const GLARE_R0_PX = 3;
+
+/**
+ * The arms of a diffraction spike, and how tight each one is.
+ *
+ * Six, because this is a sky seen by eye rather than through a telescope. The crystalline lens
+ * has radial suture lines, a Y at the front and an inverted Y at the back, and they act as a
+ * phase grating: the six-rayed star that every culture draws is a picture of somebody's own
+ * lens. A camera's four-vane spider gives four, which is the other number you see, but nothing
+ * in this sky is being photographed.
+ *
+ * `SPIKE_SHARP` is the exponent that narrows each arm. It is taste bounded by sampling: much
+ * above this and an arm is thinner than a pixel at the radius it starts from, and a feature
+ * thinner than a pixel does not get finer, it aliases.
+ */
+export const SPIKE_ARMS = 6;
+export const SPIKE_SHARP = 34;
 
 /**
  * How tightly a star's light is gathered into the middle of its quad.

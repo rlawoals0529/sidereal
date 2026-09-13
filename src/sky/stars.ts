@@ -9,9 +9,11 @@
  * measurement, the same class of thing as a USGS magnitude, and it goes through the ledger like
  * one. See `provenance.ts` for what that costs and why it does not soften the rule.
  *
- * Three things below are measurements, cited. Everything else is a display decision and says so.
+ * Where a number below is a measurement it says whose, and where it is a display decision it says
+ * that instead, which is the more useful label: it marks what you may change without a source.
  */
 import { DEG, equatorialUnit, type LocalVec } from "./astro.ts";
+import { GLARE_R0_PX } from "./constants.ts";
 import type { RGB } from "./palette.ts";
 import { STAR_BYTES, STAR_COUNT, STAR_MAG_LIMIT, STAR_NAMES } from "./stars.generated.ts";
 
@@ -113,6 +115,60 @@ export const STAR_SIZE_MAX_PX = 7;
 export const STAR_CHROMA_MAG = 3;
 export const STAR_CHROMA_SPAN = 4;
 
+/**
+ * The scale of the glare skirt, and the only part of it that is not derived.
+ *
+ * The SHAPE is measured. Veiling glare from a point source falls off as the inverse square of
+ * the angle away from it, which is the Stiles and Holladay term of the CIE disability glare
+ * equation, and the same inverse square turns up in aerosol scattering around a light in air.
+ * The amplitude is proportional to the source's illuminance, which is the same law. Between
+ * them that is what a bright star actually looks like, and it is the thing a one-pixel point
+ * cannot carry: measured on the page before this existed, every star brighter than second
+ * magnitude put together accounted for three per cent of the light on screen, which is what
+ * "flat" means when you count it.
+ *
+ * What cannot be derived is the absolute scale, because a catalogue carries magnitudes and not
+ * candelas per square metre, so turning a star into an illuminance would mean inventing the
+ * missing half. This is that scale, and it is the same class of decision as `STAR_EXPOSURE`:
+ * it places a real ratio somewhere in a display's range. Set so the brightest star in the sky
+ * carries a halo about sixteen pixels across, and the skirt of a fourth magnitude star falls
+ * under one display step, which is the radius at which nothing is drawn at all.
+ *
+ * **It is driven by real flux, not by `brightnessOf`.** Glare is an optical effect of the light
+ * that actually arrived; the display curve is applied afterwards to fit the result on a screen.
+ * Driving the skirt off the compressed curve was the first attempt and it gives every star in
+ * the catalogue a halo, because the compression puts the faintest within a factor of nineteen
+ * of the brightest rather than the true factor of fifteen hundred. The reason the halo picks
+ * out the bright stars by itself is that it is computed before that compression.
+ */
+export const GLARE_GAIN = 0.135;
+
+/**
+ * One eight-bit step, and the reason there is no magnitude threshold anywhere below.
+ *
+ * The skirt is drawn out to the radius where it falls under this and no further, and a star
+ * whose skirt is under it at every radius gets none at all. So "the brightest stars only" is
+ * not a rule written here; it is what an inverse square law and a display with 255 levels do
+ * between them. It happens to fall at about magnitude 3.9.
+ */
+export const GLARE_FLOOR = 1 / 255;
+
+/** How wide a star is allowed to get, pixels before dpr. Sirius reaches it; nothing else does. */
+export const GLARE_MAX_PX = 34;
+
+/**
+ * How much stronger a spike arm is than the skirt it sits on, and how wide that skirt has to be
+ * before any arms are drawn.
+ *
+ * The arms are the same diffraction skirt with an angular modulation on it, so they follow the
+ * same inverse square falloff and reach `sqrt(1 + SPIKE_GAIN)` times as far. The threshold is
+ * not a magnitude either: an arm narrower than a few pixels is not a spike, it is a jagged
+ * edge, so the arms appear only once the skirt itself is six pixels across. With the gain above
+ * that works out at about magnitude 0.7, which is eleven stars in the whole sky.
+ */
+export const SPIKE_GAIN = 3;
+export const SPIKE_AT_PX = 14;
+
 /** Second radiation constant hc/k, metre kelvin. CODATA 2018. */
 export const PLANCK_C2 = 0.014387769;
 /** Where the three channels are sampled, metres. Loosely R, G and B. */
@@ -159,6 +215,36 @@ export function sizeOf(mag: number): number {
   // here would flatten exactly the range this is here to hold.
   const b = Math.min(1, relativeBrightness(mag));
   return STAR_SIZE_MIN_PX + (STAR_SIZE_MAX_PX - STAR_SIZE_MIN_PX) * b * b;
+}
+
+/**
+ * The peak of the glare skirt, at `GLARE_R0_PX` from the middle of the star.
+ *
+ * Zero below the point where the skirt would never clear a display step, which is the only
+ * threshold in any of this and is derived rather than chosen. Clamped at 1 because an alpha is
+ * an alpha; the brightest star in the sky reaches about half of it.
+ */
+export function glareOf(mag: number): number {
+  const amp = GLARE_GAIN * fluxOf(mag);
+  return amp <= GLARE_FLOOR ? 0 : Math.min(1, amp);
+}
+
+/**
+ * How far a skirt of a given peak reaches before it falls under one display step.
+ *
+ * Straight out of the inverse square law: `amp * (r0 / r)^2 = floor` solved for `r`. This is
+ * where the quad has to end, so it is worked out here rather than guessed at, and a star with
+ * no skirt gets a quad the size of its core and nothing more.
+ */
+export function glareRadius(amp: number): number {
+  if (amp <= 0) return 0;
+  return Math.min(GLARE_MAX_PX, GLARE_R0_PX * Math.sqrt(amp / GLARE_FLOOR));
+}
+
+/** The arms, once the skirt is wide enough for an arm to be more than a jagged edge. */
+export function spikeOf(mag: number): number {
+  const amp = glareOf(mag);
+  return glareRadius(amp) >= SPIKE_AT_PX ? SPIKE_GAIN * amp : 0;
 }
 
 /**

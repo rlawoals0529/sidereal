@@ -148,11 +148,15 @@ check(
 
 /* The list must not reorder under the cursor. */
 const held = await page.evaluate(async () => {
-  const at = document.activeElement.getAttribute("aria-label");
+  // Identity, not the label. An entry's accessible name ends with a relative time and the page
+  // rewrites it once a second, so comparing labels across an 80ms wait reports that the cursor
+  // moved roughly eight times in a hundred when nothing moved at all: the words "10 seconds
+  // ago" simply became "11 seconds ago". That is what made this red in CI and green here.
+  const before = document.activeElement;
   window.__tick([{ id: "late", kind: "edit", at: Date.now(), lat: 1, lon: 1, placement: "regional", magnitude: 0.2, label: "arrived while reading", source: "Wikimedia EventStreams" }]);
   await new Promise((r) => setTimeout(r, 80));
   return {
-    stillThere: document.activeElement.getAttribute("aria-label") === at,
+    stillThere: document.activeElement === before,
     firstRow: document.querySelector(".entry")?.getAttribute("aria-label") ?? "",
     notice: document.querySelector(".held")?.textContent ?? "",
   };

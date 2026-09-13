@@ -126,6 +126,26 @@ async function sweep(name, prepare, { width = 1280, height = 900 } = {}) {
   await page.waitForSelector(".entry");
   await prepare(page);
 
+  /**
+   * Let every transition finish before reading a single colour.
+   *
+   * `ui.css` transitions background-color, border-color and color over 140ms, so a probe that
+   * measures the moment a state becomes reachable is sampling a frame partway through a
+   * crossfade. It reported 4.46:1 against a 4.5 floor on amethyst-yokai in CI and passed on
+   * this machine, which is the signature of a race rather than of a colour: the settled value
+   * is the one the reader actually sits looking at, and it is the only one worth a verdict.
+   *
+   * `getAnimations` covers CSS transitions as well as animations. The catch is there because a
+   * transition that is interrupted rejects, and an interrupted transition is finished for our
+   * purposes. The extra frame afterwards is for the style recalculation that follows.
+   */
+  await page.evaluate(async () => {
+    await Promise.all(
+      document.getAnimations().map((a) => a.finished.catch(() => undefined)),
+    );
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  });
+
   if (selfTest) {
     // A check that has never gone red is a check nobody has a reason to believe.
     await page.evaluate(() => {

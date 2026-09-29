@@ -36,8 +36,10 @@ export default {
       if (!sameOriginRequest(request, url)) {
         return secure(new Response("cross-site websocket denied", { status: 403 }));
       }
-      response = await sky(env).fetch(rewrite(request, "/sky"));
-      return secure(response);
+      // A 101 response carries Cloudflare's WebSocket handle outside the standard Response
+      // type. Do not reconstruct it just to add HTTP headers; the origin check is the relevant
+      // browser boundary for this path.
+      return sky(env).fetch(rewrite(request, "/sky"));
     }
 
     if (url.pathname === "/ingest") {
@@ -100,12 +102,11 @@ function sameOriginRequest(request: Request, url: URL): boolean {
 function secure(response: Response): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
-  if (!headers.has("cache-control") && response.status !== 101) headers.set("cache-control", "no-store");
+  if (!headers.has("cache-control")) headers.set("cache-control", "no-store");
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers,
-    webSocket: response.webSocket,
   });
 }
 

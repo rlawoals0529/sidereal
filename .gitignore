@@ -3,3 +3,11 @@ dist
 .wrangler
 .DS_Store
 .dev.vars
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.log

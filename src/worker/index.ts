@@ -8,71 +8,69 @@ import { Sky, type Env } from "./sky-do.ts";
 
 export { Sky };
 
-/**
- * One sky, so one name, so one instance.
- *
- * `idFromName` with a constant is what makes every visitor land in the same object. It is
- * also the thing to look at first if this ever needs to scale: a single Durable Object is a
- * single point of serialisation, and the platform's own ceiling is 32,768 sockets on it.
- * Sharding would be the usual answer and it is not available to us, because "everyone is in
- * the same sky" is the product rather than an implementation detail. So the cap in
- * `limits.ts` is a real cap and the room refuses past it, rather than a number we plan to
- * grow out of.
- */
 const SKY_NAME = "sidereal";
+const MAX_INGEST_REQUEST_BYTES = 256 * 1024;
+
+const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+};
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") {
-      return new Response("ok", { headers: { "content-type": "text/plain" } });
+      if (request.method !== "GET" && request.method !== "HEAD") return secured(methodNotAllowed("GET, HEAD"));
+      return secured(new Response(request.method === "HEAD" ? null : "ok", { headers: { "content-type": "text/plain; charset=utf-8" } }));
     }
 
     if (url.pathname === "/sky") {
+      if (request.method !== "GET") return secured(methodNotAllowed("GET"));
+      if (!sameOriginWebSocketRequest(request)) return secured(new Response(null, { status: 403 }));
+      // Do not clone/wrap a successful 101 response: the Workers WebSocket handle is a
+      // non-standard Response field and must be returned intact.
       return sky(env).fetch(rewrite(request, "/sky"));
     }
 
     if (url.pathname === "/ingest") {
-      if (!authorized(request, env)) {
-        // No body and no hint. A 401 that explains which half was wrong is a 401 that helps
-        // whoever is guessing.
-        return new Response(null, { status: 401 });
+      if (request.method !== "POST") return secured(methodNotAllowed("POST"));
+      if (!authorized(request, env)) return secured(new Response(null, { status: 401 }));
+      const contentLength = request.headers.get("Content-Length");
+      if (contentLength !== null) {
+        const bytes = Number(contentLength);
+        if (!Number.isFinite(bytes) || bytes < 0 || bytes > MAX_INGEST_REQUEST_BYTES) {
+          return secured(new Response("payload too large", { status: 413 }));
+        }
       }
-      return sky(env).fetch(rewrite(request, "/ingest"));
+      return secured(await sky(env).fetch(rewrite(request, "/ingest")));
     }
 
     if (url.pathname === "/stats") {
-      if (!authorized(request, env)) return new Response(null, { status: 401 });
-      return sky(env).fetch(rewrite(request, "/stats"));
+      if (request.method !== "GET" && request.method !== "HEAD") return secured(methodNotAllowed("GET, HEAD"));
+      if (!authorized(request, env)) return secured(new Response(null, { status: 401 }));
+      const response = await sky(env).fetch(rewrite(request, "/stats"));
+      if (request.method === "HEAD") return secured(new Response(null, response));
+      return secured(response);
     }
 
-    // Everything else is the UI slice's, once it adds an assets binding. Until then a 404
-    // here is the honest answer rather than a redirect to something that does not exist.
-    return new Response("not found", { status: 404 });
+    return secured(new Response("not found", { status: 404 }));
   },
 
-  /**
-   * The watchdog, once a minute. See the two-clocks note in `feeds.ts`.
-   *
-   * It pokes the object and lets the object decide. Doing the occupancy check out here
-   * would mean this file knowing what "occupied" means, and it would be a second place that
-   * has to agree with the room about when feeds should run.
-   *
-   * Waking a hibernating object once a minute to be told "nobody is here" costs a few
-   * milliseconds of duration, about 1,440 times a day. That is the price of the sky being
-   * able to recover from a dropped alarm within sixty seconds, and it is cheap.
-   */
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       sky(env)
         .fetch("https://sidereal.internal/tick")
         .then(() => undefined)
         .catch((error: unknown) => {
-          // Swallowed on purpose: a failed watchdog run must not fail the cron invocation,
-          // because a failing cron is a cron the platform starts backing off. Logged, so a
-          // watchdog that is failing every minute is visible rather than merely quiet.
-          console.error("sidereal: watchdog tick failed", error);
+          // Do not serialize request data or secrets into the log. A stable class/message is
+          // enough to identify a failed watchdog without dumping arbitrary objects.
+          const message = error instanceof Error ? `${error.name}: ${error.message}` : "unknown error";
+          console.error("sidereal: watchdog tick failed", message);
         }),
     );
   },
@@ -82,8 +80,6 @@ function sky(env: Env): DurableObjectStub {
   return env.SKY.get(env.SKY.idFromName(SKY_NAME));
 }
 
-/** Durable Object stubs are addressed by URL, so the path has to be restated. Keeping the
- *  original request means method, headers and body ride along unchanged. */
 function rewrite(request: Request, pathname: string): Request {
   const url = new URL(request.url);
   url.pathname = pathname;
@@ -91,18 +87,20 @@ function rewrite(request: Request, pathname: string): Request {
   return new Request(url, request);
 }
 
-/**
- * Bearer auth for the internal routes.
- *
- * Fails closed when `INGEST_TOKEN` is unset. The tempting alternative - no token
- * configured means no auth required - turns a forgotten secret in a fresh environment into
- * a world-writable sky, and it does it silently, which is the worst combination. A
- * misconfigured deploy that ingests nothing is a bug someone notices in a minute.
- *
- * The comparison is constant-time. The timing signal on a short token compared with `===`
- * is small and it is not zero, and there is no reason to leave it there when the fix is
- * eight lines.
- */
+/** Reject cross-site browser WebSocket upgrades while preserving CLI/native clients that do
+ * not send Origin. This is the enforcement counterpart to the same-origin deployment design. */
+function sameOriginWebSocketRequest(request: Request): boolean {
+  const origin = request.headers.get("Origin");
+  if (!origin) return true;
+  try {
+    const source = new URL(origin);
+    const target = new URL(request.url);
+    return source.protocol === target.protocol && source.host === target.host;
+  } catch {
+    return false;
+  }
+}
+
 function authorized(request: Request, env: Env): boolean {
   const expected = env.INGEST_TOKEN;
   if (!expected) return false;
@@ -114,10 +112,18 @@ function authorized(request: Request, env: Env): boolean {
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
-  // Length is compared first and does leak, which is unavoidable and harmless: the length
-  // of a random token is not the secret part of it.
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+function methodNotAllowed(allow: string): Response {
+  return new Response("method not allowed", { status: 405, headers: { Allow: allow } });
+}
+
+function secured(response: Response): Response {
+  const next = new Response(response.body, response);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) next.headers.set(name, value);
+  return next;
 }
